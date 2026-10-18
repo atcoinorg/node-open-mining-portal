@@ -1,202 +1,118 @@
-var poolWorkerData;
-var poolHashrateData;
-var poolBlockData;
-
+var poolWorkerData = [];
+var poolHashrateData = [];
+var poolBlockData = [];
 var poolWorkerChart;
 var poolHashrateChart;
 var poolBlockChart;
+var statData = [];
+var poolKeys = [];
+var chartSettings = document.getElementById('topCharts').dataset;
+var statsInterval = Number(chartSettings.interval) || 60;
+var statsRetention = Number(chartSettings.retention) || 43200;
 
-var statData;
-var poolKeys;
-
-function buildChartData(){
-
+function buildChartData() {
     var pools = {};
-
     poolKeys = [];
-    for (var i = 0; i < statData.length; i++){
-        for (var pool in statData[i].pools){
-            if (poolKeys.indexOf(pool) === -1)
-                poolKeys.push(pool);
-        }
-    }
-
-
-    for (var i = 0; i < statData.length; i++){
-
-        var time = statData[i].time * 1000;
-
-        for (var f = 0; f < poolKeys.length; f++){
-            var pName = poolKeys[f];
-            var a = pools[pName] = (pools[pName] || {
-                hashrate: [],
-                workers: [],
-                blocks: []
-            });
-            if (pName in statData[i].pools){
-                a.hashrate.push([time, statData[i].pools[pName].hashrate]);
-                a.workers.push([time, statData[i].pools[pName].workerCount]);
-                a.blocks.push([time, statData[i].pools[pName].blocks.pending])
+    statData.forEach(function(snapshot) {
+        Object.keys(snapshot.pools).forEach(function(pool) {
+            if (poolKeys.indexOf(pool) === -1) poolKeys.push(pool);
+        });
+    });
+    poolKeys.forEach(function(pool) { pools[pool] = {hashrate: [], workers: [], blocks: []}; });
+    statData.forEach(function(snapshot, index) {
+        var previous = statData[index - 1];
+        var missing = previous && snapshot.time - previous.time > statsInterval * 2.5;
+        poolKeys.forEach(function(name) {
+            var series = pools[name];
+            if (missing) {
+                // Missing observations are unknown, including the pending-block balance.
+                var gapTime = (previous.time + statsInterval) * 1000;
+                series.hashrate.push([gapTime, null]);
+                series.workers.push([gapTime, null]);
+                series.blocks.push([gapTime, null]);
             }
-            else{
-                a.hashrate.push([time, 0]);
-                a.workers.push([time, 0]);
-                a.blocks.push([time, 0])
-            }
-
-        }
-
+            var pool = snapshot.pools[name];
+            var time = snapshot.time * 1000;
+            series.hashrate.push([time, pool ? pool.hashrate : null]);
+            series.workers.push([time, pool ? pool.workerCount : null]);
+            series.blocks.push([time, pool ? pool.blocks.pending : null]);
+        });
+    });
+    function data(metric, previous) {
+        return poolKeys.map(function(name) {
+            var old = previous.filter(function(series) { return series.key === name; })[0];
+            return {key: name, values: pools[name][metric], disabled: old ? old.disabled : false};
+        });
     }
+    poolWorkerData = data('workers', poolWorkerData);
+    poolHashrateData = data('hashrate', poolHashrateData);
+    poolBlockData = data('blocks', poolBlockData);
+}
 
-    poolWorkerData = [];
-    poolHashrateData = [];
-    poolBlockData = [];
+function getReadableHashRateString(hashrate) {
+    var units = ['H', 'KH', 'MH', 'GH', 'TH', 'PH'];
+    var index = 0;
+    while (hashrate >= 1000 && index < units.length - 1) { hashrate /= 1000; index++; }
+    return hashrate.toFixed(2) + ' ' + units[index];
+}
 
-    for (var pool in pools){
-        poolWorkerData.push({
-            key: pool,
-            values: pools[pool].workers
+function timeOfDayFormat(timestamp) {
+    return d3.time.format('%H:%M')(new Date(timestamp));
+}
+
+function displayCharts() {
+    function chart(selector, values, format, step, assign) {
+        nv.addGraph(function() {
+            var model = nv.models.lineChart()
+                .color(['#4b0082', '#9b63c4', '#c3a0df', '#6946a0'])
+                .margin({left: 65, right: 24})
+                .x(function(d) { return d[0]; })
+                .y(function(d) { return d[1]; })
+                .defined(function(d) { return d[1] !== null && isFinite(d[1]); })
+                .forceY([0])
+                .interpolate(step ? 'step-after' : 'linear')
+                .useInteractiveGuideline(true);
+            model.xAxis.tickFormat(timeOfDayFormat);
+            model.yAxis.tickFormat(format);
+            assign(model);
+            d3.select(selector).datum(values()).call(model);
+            return model;
         });
-        poolHashrateData.push({
-            key: pool,
-            values: pools[pool].hashrate
-        });
-        poolBlockData.push({
-            key: pool,
-            values: pools[pool].blocks
-        })
     }
+    chart('#poolWorkers', function() { return poolWorkerData; }, d3.format('d'), true, function(c) { poolWorkerChart = c; });
+    chart('#poolHashrate', function() { return poolHashrateData; }, getReadableHashRateString, false, function(c) { poolHashrateChart = c; });
+    chart('#poolBlocks', function() { return poolBlockData; }, d3.format('d'), true, function(c) { poolBlockChart = c; });
 }
 
-function getReadableHashRateString(hashrate){
-    var i = -1;
-    var byteUnits = [ ' KH', ' MH', ' GH', ' TH', ' PH' ];
-    do {
-        hashrate = hashrate / 1024;
-        i++;
-    } while (hashrate > 1024);
-    return Math.round(hashrate) + byteUnits[i];
-}
-
-function timeOfDayFormat(timestamp){
-    var dStr = d3.time.format('%I:%M %p')(new Date(timestamp));
-    if (dStr.indexOf('0') === 0) dStr = dStr.slice(1);
-    return dStr;
-}
-
-function displayCharts(){
-
-    nv.addGraph(function() {
-        poolWorkerChart = nv.models.stackedAreaChart()
-            .margin({left: 40, right: 40})
-            .x(function(d){ return d[0] })
-            .y(function(d){ return d[1] })
-            .useInteractiveGuideline(true)
-            .clipEdge(true);
-
-        poolWorkerChart.xAxis.tickFormat(timeOfDayFormat);
-
-        poolWorkerChart.yAxis.tickFormat(d3.format('d'));
-
-        d3.select('#poolWorkers').datum(poolWorkerData).call(poolWorkerChart);
-
-        return poolWorkerChart;
-    });
-
-
-    nv.addGraph(function() {
-        poolHashrateChart = nv.models.lineChart()
-            .margin({left: 60, right: 40})
-            .x(function(d){ return d[0] })
-            .y(function(d){ return d[1] })
-            .useInteractiveGuideline(true);
-
-        poolHashrateChart.xAxis.tickFormat(timeOfDayFormat);
-
-        poolHashrateChart.yAxis.tickFormat(function(d){
-            return getReadableHashRateString(d);
-        });
-
-        d3.select('#poolHashrate').datum(poolHashrateData).call(poolHashrateChart);
-
-        return poolHashrateChart;
-    });
-
-
-    nv.addGraph(function() {
-        poolBlockChart = nv.models.multiBarChart()
-            .x(function(d){ return d[0] })
-            .y(function(d){ return d[1] });
-
-        poolBlockChart.xAxis.tickFormat(timeOfDayFormat);
-
-        poolBlockChart.yAxis.tickFormat(d3.format('d'));
-
-        d3.select('#poolBlocks').datum(poolBlockData).call(poolBlockChart);
-
-        return poolBlockChart;
+function TriggerChartUpdates() {
+    [[poolWorkerChart, '#poolWorkers', poolWorkerData],
+     [poolHashrateChart, '#poolHashrate', poolHashrateData],
+     [poolBlockChart, '#poolBlocks', poolBlockData]].forEach(function(item) {
+        if (item[0]) { d3.select(item[1]).datum(item[2]); item[0].update(); }
     });
 }
-
-function TriggerChartUpdates(){
-    poolWorkerChart.update();
-    poolHashrateChart.update();
-    poolBlockChart.update();
-}
-
 nv.utils.windowResize(TriggerChartUpdates);
 
-$.getJSON('/api/pool_stats', function(data){
-    statData = data;
+function mergeStats(snapshots) {
+    var byTime = {};
+    snapshots.concat(statData).forEach(function(snapshot) { byTime[snapshot.time] = snapshot; });
+    statData = Object.keys(byTime).map(function(time) { return byTime[time]; }).sort(function(a, b) { return a.time - b.time; });
+    if (statData.length) {
+        var cutoff = statData[statData.length - 1].time - statsRetention;
+        statData = statData.filter(function(snapshot) { return snapshot.time >= cutoff; });
+    }
     buildChartData();
+}
+
+$.getJSON('/api/pool_stats', function(data) {
+    mergeStats(data);
     displayCharts();
 });
 
-statsSource.addEventListener('message', function(e){
-    var stats = JSON.parse(e.data);
-    statData.push(stats);
-
-
-    var newPoolAdded = (function(){
-        for (var p in stats.pools){
-            if (poolKeys.indexOf(p) === -1)
-                return true;
-        }
-        return false;
-    })();
-
-    if (newPoolAdded || Object.keys(stats.pools).length > poolKeys.length){
-        buildChartData();
-        displayCharts();
-    }
-    else {
-        var time = stats.time * 1000;
-        for (var f = 0; f < poolKeys.length; f++) {
-            var pool =  poolKeys[f];
-            for (var i = 0; i < poolWorkerData.length; i++) {
-                if (poolWorkerData[i].key === pool) {
-                    poolWorkerData[i].values.shift();
-                    poolWorkerData[i].values.push([time, pool in stats.pools ? stats.pools[pool].workerCount : 0]);
-                    break;
-                }
-            }
-            for (var i = 0; i < poolHashrateData.length; i++) {
-                if (poolHashrateData[i].key === pool) {
-                    poolHashrateData[i].values.shift();
-                    poolHashrateData[i].values.push([time, pool in stats.pools ? stats.pools[pool].hashrate : 0]);
-                    break;
-                }
-            }
-            for (var i = 0; i < poolBlockData.length; i++) {
-                if (poolBlockData[i].key === pool) {
-                    poolBlockData[i].values.shift();
-                    poolBlockData[i].values.push([time, pool in stats.pools ? stats.pools[pool].blocks.pending : 0]);
-                    break;
-                }
-            }
-        }
-        TriggerChartUpdates();
-    }
-
-
+statsSource.addEventListener('message', function(e) {
+    var snapshot = JSON.parse(e.data);
+    // Replace duplicate timestamps instead of discarding an arbitrary oldest point.
+    statData = statData.filter(function(s) { return s.time !== snapshot.time; });
+    mergeStats([snapshot]);
+    TriggerChartUpdates();
 });

@@ -1,0 +1,9 @@
+node_modules
+.git
+.idea
+config.json
+pool_configs/*.json
+npm-debug.log*
+.env
+.docker/generated
+.docker/node/atcoin

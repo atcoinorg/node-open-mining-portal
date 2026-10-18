@@ -2,6 +2,7 @@ var zlib = require('zlib');
 
 var redis = require('redis');
 var async = require('async');
+var getImmature = require('./immature.js');
 
 
 var os = require('os');
@@ -68,7 +69,21 @@ module.exports = function(logger, portalConfig, poolConfigs){
                 return;
             }
             for (var i = 0; i < replies.length; i++){
-                _this.statHistory.push(JSON.parse(replies[i]));
+                var snapshot = JSON.parse(replies[i]);
+                // Older snapshots counted workers retained only for rewards as active.
+                var workerTotal = 0;
+                var algoWorkers = {};
+                Object.keys(snapshot.pools || {}).forEach(function(coin) {
+                    var pool = snapshot.pools[coin];
+                    if (pool.workers) pool.workerCount = activeWorkerCount(pool.workers);
+                    workerTotal += pool.workerCount || 0;
+                    algoWorkers[pool.algorithm] = (algoWorkers[pool.algorithm] || 0) + (pool.workerCount || 0);
+                });
+                if (snapshot.global) snapshot.global.workers = workerTotal;
+                Object.keys(snapshot.algos || {}).forEach(function(algo) {
+                    snapshot.algos[algo].workers = algoWorkers[algo] || 0;
+                });
+                _this.statHistory.push(snapshot);
             }
             _this.statHistory = _this.statHistory.sort(function(a, b){
                 return a.time - b.time;
@@ -77,6 +92,12 @@ module.exports = function(logger, portalConfig, poolConfigs){
                 addStatPoolHistory(stats);
             });
         });
+    }
+
+    function activeWorkerCount(workers) {
+        return Object.keys(workers).filter(function(name) {
+            return workers[name].shares > 0 || workers[name].invalidshares > 0;
+        }).length;
     }
 
     function addStatPoolHistory(stats){
@@ -114,7 +135,8 @@ module.exports = function(logger, portalConfig, poolConfigs){
                 ['hgetall', ':stats'],
                 ['scard', ':blocksPending'],
                 ['scard', ':blocksConfirmed'],
-                ['scard', ':blocksKicked']
+                ['scard', ':blocksKicked'],
+                ['hgetall', ':payouts']
             ];
 
             var commandsPerCoin = redisCommandTemplates.length;
@@ -141,6 +163,7 @@ module.exports = function(logger, portalConfig, poolConfigs){
                             symbol: poolConfigs[coinName].coin.symbol.toUpperCase(),
                             algorithm: poolConfigs[coinName].coin.algorithm,
                             hashrates: replies[i + 1],
+                            workerPayouts: replies[i + 6] || {},
                             poolStats: {
                                 validShares: replies[i + 2] ? (replies[i + 2].validShares || 0) : 0,
                                 validBlocks: replies[i + 2] ? (replies[i + 2].validBlocks || 0) : 0,
@@ -155,7 +178,13 @@ module.exports = function(logger, portalConfig, poolConfigs){
                         };
                         allCoinStats[coinStats.name] = (coinStats);
                     }
-                    callback();
+                    async.each(client.coins, function(coin, done) {
+                        getImmature(client.client, coin, poolConfigs[coin], function(error, amounts) {
+                            if (error) logger.error(logSystem, coin, 'Unable to calculate immature rewards: ' + error.message);
+                            allCoinStats[coin].immatureRewards = error ? null : amounts;
+                            done();
+                        });
+                    }, callback);
                 }
             });
         }, function(err){
@@ -206,10 +235,24 @@ module.exports = function(logger, portalConfig, poolConfigs){
                     }
                 });
 
+                var immature = coinStats.immatureRewards;
+                var payouts = coinStats.workerPayouts;
+                Object.keys(Object.assign({}, immature || {}, payouts)).forEach(function(worker) {
+                    if (!coinStats.workers[worker]) coinStats.workers[worker] = {
+                        shares: 0, invalidshares: 0, hashrateString: null
+                    };
+                });
+                Object.keys(coinStats.workers).forEach(function(worker) {
+                    coinStats.workers[worker].paid = Number(payouts[worker] || 0);
+                    coinStats.workers[worker].immature = immature === null ? null : (immature[worker] || 0);
+                });
+                delete coinStats.immatureRewards;
+                delete coinStats.workerPayouts;
+
                 var shareMultiplier = Math.pow(2, 32) / algos[coinStats.algorithm].multiplier;
                 coinStats.hashrate = shareMultiplier * coinStats.shares / portalConfig.website.stats.hashrateWindow;
 
-                coinStats.workerCount = Object.keys(coinStats.workers).length;
+                coinStats.workerCount = activeWorkerCount(coinStats.workers);
                 portalStats.global.workers += coinStats.workerCount;
 
                 /* algorithm specific global stats */
@@ -222,7 +265,7 @@ module.exports = function(logger, portalConfig, poolConfigs){
                     };
                 }
                 portalStats.algos[algo].hashrate += coinStats.hashrate;
-                portalStats.algos[algo].workers += Object.keys(coinStats.workers).length;
+                portalStats.algos[algo].workers += coinStats.workerCount;
 
                 for (var worker in coinStats.workers) {
                     coinStats.workers[worker].hashrateString = _this.getReadableHashRateString(shareMultiplier * coinStats.workers[worker].shares / portalConfig.website.stats.hashrateWindow);

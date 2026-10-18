@@ -1,0 +1,18 @@
+<div id="minerCharts" data-type="{{!it.type}}" data-id="{{!it.id}}" data-address="{{!it.address}}">
+<div class="page-heading"><a class="text-link" href="/workers">← All workers</a><span class="eyebrow" style="margin-top:24px">{{=it.type === 'worker' ? 'WORKER ACTIVITY' : 'ADDRESS ACTIVITY'}}</span><h1>{{=it.type === 'worker' ? 'Worker' : 'Address'}} charts</h1><p class="miner-identity">{{!it.id}}</p>{{? it.type === 'worker' && it.address}}<p class="miner-identity"><a href="/address/{{!encodeURIComponent(it.address)}}/charts">{{!it.address}} →</a></p>{{?}}<p>{{=it.type === 'address' ? 'Combined activity and rewards for all workers using this wallet address.' : 'Activity and rewards for this worker only.'}} History: last {{=it.retention / 3600}} hours. Shares and hashrate use a {{=it.window / 60}} minute window.</p></div>
+<p id="minerChartStatus" role="status">Loading mining history…</p>
+<div class="metric-grid" id="minerSummary" hidden>
+<section class="card metric"><span>Hashrate</span><strong data-miner-stat="hashrate">—</strong><small>Accepted work in the current window</small></section>
+<section class="card metric"><span>Accepted shares (weighted)</span><strong data-miner-stat="shares">—</strong><small>Sum of accepted share difficulty</small></section>
+<section class="card metric"><span>Immature</span><strong data-miner-stat="immature">—</strong><small>ATL awaiting block maturity</small></section>
+<section class="card metric"><span>Total paid</span><strong data-miner-stat="paid">—</strong><small>ATL recorded as paid</small></section>
+</div>
+<div class="miner-chart-grid">
+<section class="chartWrapper"><h2 class="chartLabel">Hashrate</h2><svg id="minerHashrate" aria-label="Hashrate history"></svg></section>
+<section class="chartWrapper"><h2 class="chartLabel">Accepted shares (weighted)</h2><svg id="minerShares" aria-label="Accepted share difficulty history"></svg></section>
+<section class="chartWrapper"><h2 class="chartLabel">Immature rewards · ATL</h2><svg id="minerImmature" aria-label="Immature rewards history"></svg></section>
+<section class="chartWrapper"><h2 class="chartLabel">Total paid · ATL</h2><svg id="minerPaid" aria-label="Cumulative payouts history"></svg></section>
+</div>
+<p class="chart-footnote">Rewards and payouts are snapshots, not earnings per interval. Missing historical reward values are shown as gaps.</p>
+</div>
+<script src="/static/miner-charts.js"></script>

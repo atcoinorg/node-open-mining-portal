@@ -205,7 +205,14 @@ function SetupForPool(logger, poolOptions, setupFinished){
                     return ['gettransaction', [r.txHash]];
                 });
 
-                batchRPCcommand.push(['getaccount', [poolOptions.address]]);
+                // Modern wallet RPC uses an empty dummy account in sendmany.
+                var walletRpc = (processingConfig.daemon.path || '').indexOf('/wallet/') === 0;
+                if (!walletRpc)
+                    batchRPCcommand.push(['getaccount', [poolOptions.address]]);
+                if (batchRPCcommand.length === 0) {
+                    callback(null, workers, rounds, '');
+                    return;
+                }
 
                 startRPCTimer();
                 daemon.batchCmd(batchRPCcommand, function(error, txDetails){
@@ -218,11 +225,11 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         return;
                     }
 
-                    var addressAccount;
+                    var addressAccount = '';
 
                     txDetails.forEach(function(tx, i){
 
-                        if (i === txDetails.length - 1){
+                        if (!walletRpc && i === txDetails.length - 1){
                             addressAccount = tx.result;
                             return;
                         }
@@ -234,14 +241,14 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             round.category = 'kicked';
                             return;
                         }
-                        else if (!tx.result.details || (tx.result.details && tx.result.details.length === 0)){
-                            logger.warning(logSystem, logComponent, 'Daemon reports no details for transaction: ' + round.txHash);
-                            round.category = 'kicked';
-                            return;
-                        }
                         else if (tx.error || !tx.result){
                             logger.error(logSystem, logComponent, 'Odd error with gettransaction ' + round.txHash + ' '
                                 + JSON.stringify(tx));
+                            return;
+                        }
+                        else if (!tx.result.details || (tx.result.details && tx.result.details.length === 0)){
+                            logger.warning(logSystem, logComponent, 'Daemon reports no details for transaction: ' + round.txHash);
+                            round.category = 'kicked';
                             return;
                         }
 
@@ -378,7 +385,9 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         if (toSend >= minPaymentSatoshis) {
                             totalSent += toSend;
                             var address = worker.address = (worker.address || getProperAddress(w));
-                            worker.sent = addressAmounts[address] = satoshisToCoins(toSend);
+                            worker.sent = satoshisToCoins(toSend);
+                            addressAmounts[address] = satoshisToCoins(
+                                coinsToSatoshies(addressAmounts[address] || 0) + toSend);
                             worker.balanceChange = Math.min(worker.balance, toSend) * -1;
                         }
                         else {
@@ -531,6 +540,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
 
 
     var getProperAddress = function(address){
+        address = address.split('.')[0];
         if (address.length === 40){
             return util.addressFromEx(poolOptions.address, address);
         }

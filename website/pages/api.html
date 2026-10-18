@@ -1,10 +1,10 @@
-<div>
-    API Docs here
-
-<ul>
-<li>/stats - raw json statistic</li>
-<li>/pool_stats - historical time per pool json </li>
-<li>/live_stats - live stats </li>
-
-</ul>
+<div class="page-heading"><span class="eyebrow">DEVELOPER RESOURCES</span><h1>Pool API</h1><p>Read pool statistics, historical data and live updates. All endpoints are read-only and require no authentication.</p></div>
+<div class="api-list">
+<section class="card api-endpoint"><span class="badge">GET · JSON</span><h2><a href="/api/stats">/api/stats</a></h2><p>Current pool and worker statistics, including hashrate, immature rewards and total paid per worker.</p><pre><code>curl {{!it.portalConfig.website.host === '0.0.0.0' ? 'http://localhost' : 'http://' + it.portalConfig.website.host}}{{=Number(it.portalConfig.website.port) === 80 ? '' : ':' + it.portalConfig.website.port}}/api/stats</code></pre></section>
+<section class="card api-endpoint"><span class="badge">GET · JSON</span><h2><a href="/api/pool_stats">/api/pool_stats</a></h2><p>Historical pool hashrate, worker counts and block statistics used by the charts.</p></section>
+<section class="card api-endpoint"><span class="badge">GET · EVENT STREAM</span><h2>/api/live_stats</h2><p>Server-sent events with updated statistics at the pool's configured refresh interval.</p><pre><code>const events = new EventSource('/api/live_stats');
+events.onmessage = function(event) {
+    const stats = JSON.parse(event.data);
+    console.log(stats.pools);
+};</code></pre></section>
 </div>

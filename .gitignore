@@ -1,5 +1,8 @@
 node_modules/
 .idea/
+.env
+.docker/generated/
+.docker/node/atcoin/
 config.json
 pool_configs/*.json
 !pool_configs/litecoin_example.json

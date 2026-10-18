@@ -1,66 +1,28 @@
-<style>
-
-    #topCharts {
-        padding: 18px;
-    }
-
-    #topCharts > div > div > svg {
-        display: block;
-        height: 280px;
-    }
-
-    .chartWrapper {
-        border: solid 1px #c7c7c7;
-        border-radius: 5px;
-        padding: 5px;
-        margin-bottom: 18px;
-    }
-
-    .chartLabel {
-        font-size: 1.2em;
-        text-align: center;
-        padding: 4px;
-    }
-
-    .chartHolder {
-
-    }
-
-    table {
-        width: 100%;
-    }
-
-</style>
-
-
-<div id="topCharts">
-
-{{ for(var pool in it.stats.pools) { }}
-
-    <div class="chartWrapper">
-        <div class="chartLabel">{{=it.stats.pools[pool].name}}</div>
-        <div class="chartHolder">
-            <table class="pure-table">
-                <thead>
-                <tr>
-                    <th>Address</th>
-                    <th>Shares</th>
-                    <th>Invalid shares</th>
-                    <th>Efficiency</th>
-                    <th>Hashrate</th>
-                </tr>
-                </thead>
-                {{ for(var worker in it.stats.pools[pool].workers) { }}
-                   {{var workerstat = it.stats.pools[pool].workers[worker];}}
-                    <tr class="pure-table-odd">
-                        <td>{{=worker}}</td>
-                        <td>{{=Math.floor(workerstat.shares)}}</td>
-                        <td>{{=Math.floor(workerstat.invalidshares)}}</td>
-                        <td>{{? workerstat.shares > 0}} {{=Math.floor(10000 * workerstat.shares / (workerstat.shares + workerstat.invalidshares)) / 100}}% {{??}} 0% {{?}}</td>
-                        <td>{{=workerstat.hashrateString}}</td>
-                    </tr>
-                {{ } }}
-            </table>
-        </div>
+<div id="workersPage">
+<span class="eyebrow">MINER ACTIVITY</span><h1>Workers</h1>
+<p class="workers-note">Immature: estimated rewards awaiting block maturity. Paid: total ATL already sent to your wallet.</p>
+<section class="workers-card">
+    <div class="workers-toolbar">
+        <label class="worker-search">Search Worker or Address<input id="workerSearch" type="search" placeholder="Worker name or wallet address" autocomplete="off"></label>
+        <label class="worker-page-size">Rows per page<select id="workerLimit"><option>25</option><option>50</option><option>100</option></select></label>
     </div>
-{{ } }}
+    <div class="workers-table-scroll" role="region" aria-label="Worker statistics" tabindex="0">
+        <table class="workers-list">
+            <thead><tr>
+                <th data-worker-sort="worker"><button type="button">Worker <span class="sort-indicator">↕</span></button></th>
+                <th data-worker-sort="address"><button type="button">Address <span class="sort-indicator">↕</span></button></th>
+                <th data-worker-sort="shares" aria-sort="descending"><button type="button">Shares <span class="sort-indicator">↓</span></button></th>
+                <th>Invalid shares</th><th>Efficiency</th><th>Hashrate</th>
+                <th data-worker-sort="immature"><button type="button">Immature <span class="sort-indicator">↕</span></button></th>
+                <th data-worker-sort="paid"><button type="button">Paid <span class="sort-indicator">↕</span></button></th>
+            </tr></thead>
+            <tbody id="workerRows"><tr><td colspan="8" class="workers-empty">Loading workers…</td></tr></tbody>
+        </table>
+    </div>
+    <div class="workers-pagination">
+        <span id="workerCount" role="status" aria-live="polite"></span>
+        <nav aria-label="Worker list pagination"><button id="workerPrevious" type="button" disabled>← Previous</button><span id="workerPage"></span><button id="workerNext" type="button" disabled>Next →</button></nav>
+    </div>
+</section>
+</div>
+<script src="/static/workers.js"></script>

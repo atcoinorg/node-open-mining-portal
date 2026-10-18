@@ -42,13 +42,19 @@
         "compression": "*",
         "dot": "*",
         "colors": "*",
-        "node-watch": "0.5.9",
-        "request": "2.69.0",
+        "node-watch": "0.7.4",
+        "request": "2.88.2",
         "nonce": "*",
         "bignum": "0.13.1",
-        "extend": "*"
+        "extend": "*",
+        "bech32": "2.0.0"
     },
     "engines": {
-        "node": ">=0.10"
+        "node": "22.x"
+    },
+    "scripts": {
+        "start": "node scripts/setup-config.js && node scripts/wait-for-rpc.js && node init.js",
+        "check": "node scripts/check.js",
+        "test": "node scripts/check.js"
     }
 }

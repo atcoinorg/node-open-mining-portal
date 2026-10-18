@@ -134,9 +134,10 @@ module.exports = function(logger){
                 if (poolOptions.validateWorkerUsername !== true)
                     authCallback(true);
                 else {
-                    if (workerName.length === 40) {
+                    var address = workerName.split('.')[0];
+                    if (/^[0-9a-fA-F]{40}$/.test(address)) {
                         try {
-                            new Buffer(workerName, 'hex');
+                            Buffer.from(address, 'hex');
                             authCallback(true);
                         }
                         catch (e) {
@@ -144,9 +145,9 @@ module.exports = function(logger){
                         }
                     }
                     else {
-                        pool.daemon.cmd('validateaddress', [workerName], function (results) {
+                        pool.daemon.cmd('validateaddress', [address], function (results) {
                             var isValid = results.filter(function (r) {
-                                return r.response.isvalid
+                                return !r.error && r.response && r.response.isvalid
                             }).length > 0;
                             authCallback(isValid);
                         });

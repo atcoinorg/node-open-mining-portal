@@ -1,34 +1,8 @@
-<style>
 
-    #topCharts{
-        padding: 18px;
-    }
 
-    #topCharts > div > div > svg{
-        display: block;
-        height: 280px;
-    }
-
-    .chartWrapper{
-        border: solid 1px #c7c7c7;
-        border-radius: 5px;
-        padding: 5px;
-        margin-bottom: 18px;
-    }
-
-    .chartLabel{
-        font-size: 1.2em;
-        text-align: center;
-        padding: 4px;
-    }
-
-    .chartHolder{
-
-    }
-
-</style>
-
-<div id="topCharts">
+<div class="page-heading"><span class="eyebrow">NETWORK ACTIVITY</span><h1>Mining charts</h1><p>Historical worker activity, pool hashrate and pending blocks.</p></div>
+<p>Workers are counted from shares submitted in the last {{=it.portalConfig.website.stats.hashrateWindow}} seconds. Pending blocks remain pending while miners are offline. Gaps indicate missing measurements.</p>
+<div id="topCharts" data-interval="{{=it.portalConfig.website.stats.updateInterval}}" data-retention="{{=it.portalConfig.website.stats.historicalRetention}}">
 
     <div class="chartWrapper">
         <div class="chartLabel">Workers Per Pool</div>

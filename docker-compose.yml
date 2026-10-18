@@ -1,0 +1,68 @@
+services:
+  npm:
+    container_name: atcoin-portal
+    build:
+      context: .
+      dockerfile: .docker/npm/Dockerfile
+    env_file: .env
+    command: ["sh", "-c", "node scripts/setup-config.js && node scripts/wait-for-rpc.js && exec node init.js"]
+    init: true
+    restart: always
+    environment:
+      ATCOIN_RPC_HOST: atcoin-portal-node
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    networks:
+      - atcoin-networks
+    ports:
+      - "${WEBSITE_PORT}:${WEBSITE_PORT}"
+      - "${STRATUM_PORT}:${STRATUM_PORT}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      node:
+        condition: service_started
+
+  redis:
+    container_name: atcoin-portal-redis
+    image: redis:7-bookworm
+    networks:
+      - atcoin-networks
+    restart: always
+    ports:
+      - "127.0.0.1:${REDIS_PORT}:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  node:
+    container_name: atcoin-portal-node
+    env_file: .env
+    build:
+      context: ./.docker/node
+    networks:
+      - atcoin-networks
+    volumes:
+      - ./.docker/node/atcoin:/root/.atcoin:rw
+      - ./.docker/generated/atcoin.conf:/root/.atcoin/atcoin.conf:ro
+    command: ["atcoind", "-conf=/root/.atcoin/atcoin.conf", "-datadir=/root/.atcoin", "-printtoconsole"]
+    stop_grace_period: 1m
+    restart: always
+    healthcheck:
+      test: ["CMD", "atcoin-cli", "-conf=/root/.atcoin/atcoin.conf", "-rpcwallet=${ATCOIN_WALLET}", "getwalletinfo"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30m
+
+volumes:
+  redis-data:
+
+networks:
+  atcoin-networks:
+    driver: bridge

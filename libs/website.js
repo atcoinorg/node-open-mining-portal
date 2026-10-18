@@ -95,7 +95,7 @@ module.exports = function(logger){
 
 
     //If an html file was changed reload it
-    watch('website', function(filename){
+    watch('website', { recursive: true }, function(event, filename){
         var basename = path.basename(filename);
         if (basename in pageFiles){
             console.log(filename);
@@ -157,6 +157,11 @@ module.exports = function(logger){
                                 }
                         }
                     })();
+                    // The legacy key generator only supports Base58 addresses.
+                    if (/^(?:atcoin|bc|tb|bcrt)1/i.test(coinInfo.address)) {
+                        cback();
+                        return;
+                    }
                     var daemon = new Stratum.daemon.interface([coinInfo.daemon], function(severity, message){
                         logger[severity](logSystem, c, message);
                     });
@@ -245,6 +250,21 @@ module.exports = function(logger){
     app.get('/key.html', function(req, res, next){
         res.end(keyScriptProcessed);
     });
+
+    var minerChartTemplate = dot.template(fs.readFileSync('website/pages/miner_charts.html', 'utf8'));
+    function minerCharts(type) {
+        return function(req, res) {
+            if (!pageTemplates.index) return res.status(503).send('Statistics are initializing. Please refresh.');
+            var id = req.params.id;
+            var address = typeof req.query.address === 'string' ? req.query.address : '';
+            var page = minerChartTemplate({type: type, id: id, address: address,
+                retention: portalConfig.website.stats.historicalRetention,
+                window: portalConfig.website.stats.hashrateWindow});
+            res.type('html').send(pageTemplates.index({page: page, selected: 'workers'}));
+        };
+    }
+    app.get('/worker/:id/charts', minerCharts('worker'));
+    app.get('/address/:id/charts', minerCharts('address'));
 
     app.get('/:page', route);
     app.get('/', route);

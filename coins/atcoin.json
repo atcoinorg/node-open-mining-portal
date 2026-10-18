@@ -1,0 +1,6 @@
+{
+    "name": "atcoin",
+    "symbol": "ATL",
+    "algorithm": "scrypt",
+    "peerMagic": "0x1e031312"
+}
