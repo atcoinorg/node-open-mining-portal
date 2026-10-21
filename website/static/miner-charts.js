@@ -9,11 +9,12 @@ $(function() {
         return value.toFixed(2) + ' ' + units[i];
     }
     function number(value) { return value === null ? '—' : value.toLocaleString('en-US', {maximumFractionDigits: 8}); }
+    function amount(value) { return value === null ? '—' : value.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
     var configs = [
         {id: 'minerHashrate', key: 'hashrate', label: 'Hashrate', format: hashrate},
         {id: 'minerShares', key: 'shares', label: 'Accepted share difficulty', format: number},
-        {id: 'minerImmature', key: 'immature', label: 'Immature ATL', format: number},
-        {id: 'minerPaid', key: 'paid', label: 'Paid ATL', format: number}
+        {id: 'minerImmature', key: 'immature', label: 'Immature ATL', format: amount},
+        {id: 'minerPaid', key: 'paid', label: 'Paid ATL', format: amount}
     ];
     var payments = [], paymentPage = 1, paymentLimit = 25;
     function renderPayments() {
@@ -25,7 +26,7 @@ $(function() {
             payments.slice((paymentPage - 1) * paymentLimit, paymentPage * paymentLimit).forEach(function(payment) {
                 var row = document.createElement('tr');
                 ['Paid', payment.txid, number(payment.amount) + ' ' + (payment.symbol || payment.pool),
-                    new Date(payment.time * 1000).toLocaleString()].forEach(function(value, index) {
+                    window.formatDateTime(payment.time * 1000)].forEach(function(value, index) {
                     var cell = document.createElement('td');
                     cell.textContent = value;
                     if (index === 1) cell.style.overflowWrap = 'anywhere';
@@ -70,11 +71,11 @@ $(function() {
                 }) : []}];
                 if (!charts[config.id]) {
                     var chart = charts[config.id] = nv.models.lineChart()
-                        .color(['#4b0082']).margin({left: 85, right: 24})
+                        .color(['#4b0082']).margin({left: 110, right: 24})
                         .x(function(d) { return d.x; }).y(function(d) { return d.y; })
                         .defined(function(d) { return d.y !== null; })
                         .useInteractiveGuideline(true).showLegend(false).forceY([0]);
-                    chart.xAxis.tickFormat(function(time) { return d3.time.format('%H:%M')(new Date(time)); });
+                    chart.xAxis.tickFormat(function(time) { return window.formatTime(time); });
                     chart.yAxis.tickFormat(config.format);
                     chart.noData('No mining history available yet');
                     nv.utils.windowResize(chart.update);

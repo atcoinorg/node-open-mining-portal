@@ -621,7 +621,7 @@ module.exports = function(logger){
                 }) + '\n');
             }).on('error', function(error){
                 if (error.code === 'ECONNREFUSED')
-                    logger.error(logSystem, 'CLI', 'Could not connect to NOMP instance on port ' + portalConfig.cliPort);
+                    logger.error(logSystem, 'CLI', 'Could not connect to ATCOIN instance on port ' + portalConfig.cliPort);
                 else
                     logger.error(logSystem, 'CLI', 'Socket error ' + JSON.stringify(error));
             });

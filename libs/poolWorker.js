@@ -225,7 +225,7 @@ module.exports = function(logger){
         var proxyState = {};
 
         //
-        // Load proxy state for each algorithm from redis which allows NOMP to resume operation
+        // Load proxy state for each algorithm from redis which allows ATCOIN to resume operation
         // on the last pool it was using when reloaded or restarted
         //
         logger.debug(logSystem, logComponent, logSubCat, 'Loading last proxy state from redis');

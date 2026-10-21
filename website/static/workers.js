@@ -40,7 +40,7 @@ $(function() {
                 else if (status.checkedAt) text += 'Payment check completed.';
                 else text += 'Waiting for payment status.';
                 if (status.lastTxid) text += ' Last payment: ' + Number(status.lastAmount).toFixed(8) + ' ' + payment.symbol +
-                    ' · ' + new Date(Number(status.lastPaidAt) * 1000).toLocaleString() + ' · TX: ' + status.lastTxid;
+                    ' · ' + window.formatDateTime(Number(status.lastPaidAt) * 1000) + ' · TX: ' + status.lastTxid;
                 message.textContent = text;
                 paymentStatus.appendChild(message);
             });
@@ -66,7 +66,7 @@ $(function() {
                     var receipt = document.createElement('small');
                     receipt.className = 'worker-payment-detail';
                     receipt.textContent = 'TX: ' + w.lastPayment.txid.slice(0, 12) + '…';
-                    receipt.title = w.lastPayment.txid + ' · ' + new Date(w.lastPayment.time * 1000).toLocaleString();
+                    receipt.title = w.lastPayment.txid + ' · ' + window.formatDateTime(w.lastPayment.time * 1000);
                     paid.appendChild(receipt);
                 }
                 tbody.appendChild(row);

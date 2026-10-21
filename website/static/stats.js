@@ -57,7 +57,7 @@ function getReadableHashRateString(hashrate) {
 }
 
 function timeOfDayFormat(timestamp) {
-    return d3.time.format('%H:%M')(new Date(timestamp));
+    return window.formatTime(timestamp);
 }
 
 function displayCharts() {

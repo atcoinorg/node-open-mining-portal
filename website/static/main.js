@@ -1,3 +1,24 @@
+// Display chart times in the browser's local time.
+window.formatTime = function(value) {
+    var date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '—';
+    function pad(number) { return String(number).padStart(2, '0'); }
+    var hour = date.getHours();
+    return (hour % 12 || 12) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds()) +
+        (hour < 12 ? ' AM' : ' PM');
+};
+
+// Display dates in the browser's local time using the shared site format.
+window.formatDateTime = function(value) {
+    var date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return '—';
+    function pad(number) { return String(number).padStart(2, '0'); }
+    var hour = date.getHours();
+    return date.getFullYear() + '.' + pad(date.getMonth() + 1) + '.' + pad(date.getDate()) +
+        ', ' + (hour % 12 || 12) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds()) +
+        (hour < 12 ? ' AM' : ' PM');
+};
+
 $(function(){
 
     window.statsSource = new EventSource("/api/live_stats");

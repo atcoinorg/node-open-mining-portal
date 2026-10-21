@@ -10,7 +10,7 @@ module.exports = function() {
     var version         = '0.1.0',
         PUBLIC_API_URL  = 'https://api.mintpal.com/v2/market',
         PRIVATE_API_URL  = 'https://api.mintpal.com/v2/market',
-        USER_AGENT      = 'nomp/node-open-mining-portal'
+        USER_AGENT      = 'ATCOIN/node-open-mining-portal'
 
     // Constructor
     function Mintpal(key, secret){

@@ -11,7 +11,7 @@
 Contributed by Alex Petrov aka SysMan at sysman.net
 Updated by Alejandro Reyero - TodoJuegos.com
 
-Part of NOMP project
+Part of ATCOIN project
 Simple lightweight & fast - a more efficient block notify script in pure C.
 
 (may also work as coin switch)
@@ -22,7 +22,7 @@ Build with:
     gcc blocknotify.c -o blocknotify
 
 
-Example usage in daemon coin.conf using default NOMP CLI port of 17117
+Example usage in daemon coin.conf using default ATCOIN CLI port of 17117
     blocknotify="/bin/blocknotify 127.0.0.1:17117 dogecoin %s"
 
 
@@ -43,7 +43,7 @@ int main(int argc, char **argv)
     if (argc < 3)
     {
         // print help
-        printf("NOMP pool block notify\n usage: <host:port> <coin> <block>\n");
+        printf("ATCOIN pool block notify\n usage: <host:port> <coin> <block>\n");
         exit(1);
     }
 
