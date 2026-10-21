@@ -16,5 +16,7 @@ RUN npm ci --ignore-scripts \
     && npm cache clean --force
 
 COPY . .
-RUN node .docker/npm/patch-dependencies.js && node .docker/npm/check-native.js
+RUN node .docker/npm/patch-dependencies.js && node .docker/npm/check-native.js \
+    && chown -R node:node /app
+USER node
 CMD ["node", "init.js"]

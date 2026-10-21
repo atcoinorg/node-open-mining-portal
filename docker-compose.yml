@@ -7,6 +7,12 @@ services:
     env_file: .env
     command: ["sh", "-c", "node scripts/setup-config.js && node scripts/wait-for-rpc.js && exec node init.js"]
     init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     restart: always
     environment:
       ATCOIN_RPC_HOST: atcoin-portal-node
@@ -33,7 +39,7 @@ services:
       - "127.0.0.1:${REDIS_PORT}:6379"
     volumes:
       - redis-data:/data
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -66,3 +72,6 @@ volumes:
 networks:
   atcoin-networks:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.64.0/24

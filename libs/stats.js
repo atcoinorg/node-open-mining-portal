@@ -69,7 +69,9 @@ module.exports = function(logger, portalConfig, poolConfigs){
                 return;
             }
             for (var i = 0; i < replies.length; i++){
-                var snapshot = JSON.parse(replies[i]);
+                var snapshot;
+                try { snapshot = JSON.parse(replies[i]); } catch (_) { continue; }
+                if (!snapshot || typeof snapshot !== 'object' || !Number.isFinite(snapshot.time)) continue;
                 // Older snapshots counted workers retained only for rewards as active.
                 var workerTotal = 0;
                 var algoWorkers = {};
@@ -217,7 +219,7 @@ module.exports = function(logger, portalConfig, poolConfigs){
 
             Object.keys(allCoinStats).forEach(function(coin){
                 var coinStats = allCoinStats[coin];
-                coinStats.workers = {};
+                coinStats.workers = Object.create(null);
                 coinStats.shares = 0;
                 coinStats.hashrates.forEach(function(ins){
                     var parts = ins.split(':');

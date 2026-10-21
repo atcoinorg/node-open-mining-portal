@@ -115,7 +115,8 @@ module.exports = function(logger){
             var statData = 'data: ' + JSON.stringify(portalStats.stats) + '\n\n';
             for (var uid in portalApi.liveStatConnections){
                 var res = portalApi.liveStatConnections[uid];
-                res.write(statData);
+                if (res.writableLength > 65536) { res.destroy(); continue; }
+                if (!res.writableNeedDrain) res.write(statData);
             }
 
         });
@@ -153,7 +154,8 @@ module.exports = function(logger){
                             if (pName.toLowerCase() === c)
                                 return {
                                     daemon: poolConfigs[pName].paymentProcessing.daemon,
-                                    address: poolConfigs[pName].address
+                                    address: poolConfigs[pName].address,
+                                    privateKeyVersion: poolConfigs[pName].coin.privateKeyVersion
                                 }
                         }
                     })();
@@ -162,23 +164,17 @@ module.exports = function(logger){
                         cback();
                         return;
                     }
-                    var daemon = new Stratum.daemon.interface([coinInfo.daemon], function(severity, message){
-                        logger[severity](logSystem, c, message);
-                    });
-                    daemon.cmd('dumpprivkey', [coinInfo.address], function(result){
-                        if (result[0].error){
-                            logger.error(logSystem, c, 'Could not dumpprivkey for ' + c + ' ' + JSON.stringify(result[0].error));
-                            cback();
-                            return;
-                        }
-
-                        var vBytePub = util.getVersionByte(coinInfo.address)[0];
-                        var vBytePriv = util.getVersionByte(result[0].response)[0];
-
-                        coinBytes[c] = vBytePub.toString() + ',' + vBytePriv.toString();
-                        coinsForRedis[c] = coinBytes[c];
+                    // Never export a wallet private key just to discover a network version.
+                    var configured = coinInfo.privateKeyVersion;
+                    if (!Number.isInteger(configured) || configured < 0 || configured > 255) {
+                        logger.warning(logSystem, c, 'Set coin.privateKeyVersion to enable the legacy Base58 key generator');
                         cback();
-                    });
+                        return;
+                    }
+                    var vBytePub = util.getVersionByte(coinInfo.address)[0];
+                    coinBytes[c] = vBytePub.toString() + ',' + configured.toString();
+                    coinsForRedis[c] = coinBytes[c];
+                    cback();
                 }, function(err){
                     callback(null, client, coinBytes, coinsForRedis);
                 });
@@ -214,7 +210,7 @@ module.exports = function(logger){
     buildKeyScriptPage();
 
     var getPage = function(pageId){
-        if (pageId in pageProcessed){
+        if (Object.hasOwn(pageProcessed, pageId)){
             var requestedPage = pageProcessed[pageId];
             return requestedPage;
         }
@@ -222,7 +218,7 @@ module.exports = function(logger){
 
     var route = function(req, res, next){
         var pageId = req.params.page || '';
-        if (pageId in indexesProcessed){
+        if (Object.hasOwn(indexesProcessed, pageId)){
             res.header('Content-Type', 'text/html');
             res.end(indexesProcessed[pageId]);
         }
@@ -236,7 +232,17 @@ module.exports = function(logger){
     var app = express();
 
 
-    app.use(bodyParser.json());
+    app.disable('x-powered-by');
+    app.use(function(req, res, next) {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('Referrer-Policy', 'same-origin');
+        res.setHeader('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
+        if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+        next();
+    });
+    app.use('/api', require('./httpLimits')());
+    app.use(bodyParser.json({limit: '8kb', strict: true}));
 
     app.get('/get_page', function(req, res, next){
         var requestedPage = getPage(req.query.id);
@@ -256,6 +262,9 @@ module.exports = function(logger){
         return function(req, res) {
             if (!pageTemplates.index) return res.status(503).send('Statistics are initializing. Please refresh.');
             var id = req.params.id;
+            if (!/^[A-Za-z0-9._-]{1,256}$/.test(id) ||
+                (req.query.address !== undefined && (typeof req.query.address !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(req.query.address))))
+                return res.status(400).json({error: 'Invalid miner identifier'});
             var address = typeof req.query.address === 'string' ? req.query.address : '';
             var page = minerChartTemplate({type: type, id: id, address: address,
                 retention: portalConfig.website.stats.historicalRetention,
@@ -273,33 +282,27 @@ module.exports = function(logger){
         portalApi.handleApiRequest(req, res, next);
     });
 
-    app.post('/api/admin/:method', function(req, res, next){
-        if (portalConfig.website
-            && portalConfig.website.adminCenter
-            && portalConfig.website.adminCenter.enabled){
-            if (portalConfig.website.adminCenter.password === req.body.password)
-                portalApi.handleAdminApiRequest(req, res, next);
-            else
-                res.send(401, JSON.stringify({error: 'Incorrect Password'}));
-
-        }
-        else
-            next();
-
+    app.post('/api/admin/:method', require('./adminSecurity')(websiteConfig.adminCenter), function(req, res, next) {
+        portalApi.handleAdminApiRequest(req, res, next);
     });
 
     app.use(compress());
     app.use('/static', express.static('website/static'));
 
     app.use(function(err, req, res, next){
-        console.error(err.stack);
-        res.send(500, 'Something broke!');
+        logger.warning(logSystem, 'HTTP', 'Rejected invalid HTTP request');
+        res.status(err.status === 413 ? 413 : 400).json({error: 'Invalid request'});
     });
 
     try {
-        app.listen(portalConfig.website.port, portalConfig.website.host, function () {
+        var server = app.listen(portalConfig.website.port, portalConfig.website.host, function () {
             logger.debug(logSystem, 'Server', 'Website started on ' + portalConfig.website.host + ':' + portalConfig.website.port);
         });
+        server.requestTimeout = 15000;
+        server.headersTimeout = 10000;
+        server.keepAliveTimeout = 5000;
+        server.maxHeadersCount = 100;
+        server.maxConnections = 2048;
     }
     catch(e){
         logger.error(logSystem, 'Server', 'Could not start website on ' + portalConfig.website.host + ':' + portalConfig.website.port

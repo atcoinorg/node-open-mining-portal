@@ -21,8 +21,10 @@ Docker запускается через `sudo docker`. Для пользова�
 Контейнеры: `atcoin-portal`, `atcoin-portal-redis`, `atcoin-portal-node`.
 По умолчанию сайт: http://localhost, Stratum: `127.0.0.1:3333`.
 Логин майнера — адрес кошелька без суффикса `.worker`, пароль — `x`.
-RPC и Redis публикуются только на loopback хоста. Для сети узла Docker сам
-выбирает свободную подсеть. Портал использует сеть хоста Linux.
+RPC не публикуется на хост; Redis публикуется только на loopback.
+Контейнеры используют bridge-подсеть `172.30.64.0/24`; генератор RPC разрешает
+её по умолчанию. При изменении подсети задайте согласованный `ATCOIN_RPC_ALLOW_IP`.
+Портал работает от пользователя `node`. Redis использует AOF с `appendfsync always`.
 
 Основные переменные: `ATCOIN_RPC_*`, `ATCOIN_WALLET`, `ATCOIN_POOL_ADDRESS`,
 `ATCOIN_P2P_PORT`, `WEBSITE_PORT`, `REDIS_PORT`, `STRATUM_PORT`,
@@ -48,3 +50,19 @@ GCC/G++. Нативные модули собираются из исходни�
 
 `make check` не отправляет транзакции и не выполняет майнинг.
 Реальные выплаты делает обработчик пула по накопленным в Redis начислениям.
+
+## Проверки безопасности
+
+`npm test` запускает изолированные регрессионные тесты на Node 22.
+`npm run check` и `make check` обращаются к настроенному RPC и Stratum;
+это отдельная эксплуатационная проверка.
+
+Админ-панель требует пароль от 16 символов и HTTPS. Cookie сессии имеет
+HttpOnly, Secure, SameSite=Strict; исходный пароль больше не сохраняется.
+За TLS reverse proxy укажите `website.adminCenter.origin` — точный публичный
+origin (например `https://pool.example`). Для локального HTTP разрешено явно
+задать `secureCookies: false`; production должен использовать Secure.
+
+Журналы `paymentInFlight`, `paymentCommitPending` и `paymentCycleLock` нельзя
+удалять для принудительного перезапуска выплат без сверки с кошельком.
+Процедура и ограничения приведены в `SECURITY_AUDIT.md` в корне репозитория.

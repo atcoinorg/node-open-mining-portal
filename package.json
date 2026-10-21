@@ -31,22 +31,20 @@
         "url": "https://github.com/atcoinorg/node-open-mining-portal.git"
     },
     "dependencies": {
-        "stratum-pool": "https://github.com/atcoinorg/node-stratum-pool.git",
+        "stratum-pool": "git+ssh://git@github.com/atcoinorg/node-stratum-pool.git#03a9c76f57a6cc1b6ed37fb3b1797ec006433d41",
         "dateformat": "1.0.12",
-        "node-json-minify": "*",
+        "node-json-minify": "3.0.0",
         "redis": "0.12.1",
-        "mysql": "*",
+        "mysql": "2.18.1",
         "async": "1.5.2",
-        "express": "*",
-        "body-parser": "*",
-        "compression": "*",
-        "dot": "*",
-        "colors": "*",
+        "express": "5.2.1",
+        "body-parser": "2.3.0",
+        "compression": "1.8.2",
+        "dot": "1.1.3",
+        "colors": "1.4.0",
         "node-watch": "0.7.4",
-        "request": "2.88.2",
-        "nonce": "*",
-        "bignum": "0.13.1",
-        "extend": "*",
+        "nonce": "1.0.4",
+        "extend": "3.0.2",
         "bech32": "2.0.0"
     },
     "engines": {
@@ -55,6 +53,12 @@
     "scripts": {
         "start": "node scripts/setup-config.js && node scripts/wait-for-rpc.js && node init.js",
         "check": "node scripts/check.js",
-        "test": "node scripts/check.js"
+        "test": "npm run test:security && node scripts/test-stats-history.js && npm run test:stratum",
+        "test:security": "node --test test/security.test.js && node scripts/test-payments.js",
+        "test:stratum": "node scripts/test-stratum.js"
+    },
+    "overrides": {
+        "trim-newlines": "3.0.1",
+        "proxy-addr": "2.0.8"
     }
 }

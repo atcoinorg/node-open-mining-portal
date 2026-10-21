@@ -6,6 +6,7 @@ var async = require('async');
 
 var Stratum = require('stratum-pool');
 var util = require('stratum-pool/lib/util.js');
+var paymentMath = require('./paymentMath');
 
 
 module.exports = function(logger){
@@ -64,6 +65,10 @@ function SetupForPool(logger, poolOptions, setupFinished){
     });
     var redisClient = redis.createClient(poolOptions.redis.port, poolOptions.redis.host);
 
+    redisClient.on('error', function() {
+        logger.error(logSystem, logComponent, 'Payment Redis connection failed; preserve payment journals for reconciliation');
+    });
+
     var magnitude;
     var minPaymentSatoshis;
     var coinPrecision;
@@ -111,7 +116,10 @@ function SetupForPool(logger, poolOptions, setupFinished){
                     coinPrecision = poolOptions.coin.precision == null ? 8 : poolOptions.coin.precision;
                     if (!Number.isInteger(coinPrecision) || coinPrecision < 0 || coinPrecision > 8) throw new Error('Invalid coin precision');
                     magnitude = Math.pow(10, coinPrecision);
-                    minPaymentSatoshis = Math.round(processingConfig.minimumPayment * magnitude);
+                    minPaymentSatoshis = paymentMath.toUnits(processingConfig.minimumPayment, coinPrecision);
+                    if (!Number.isSafeInteger(minPaymentSatoshis) || minPaymentSatoshis <= 0 ||
+                        !Number.isFinite(processingConfig.paymentInterval) || processingConfig.paymentInterval <= 0)
+                        throw new Error('Invalid payment threshold or interval');
                     callback();
                 }
                 catch(e){
@@ -141,11 +149,15 @@ function SetupForPool(logger, poolOptions, setupFinished){
 
 
     var satoshisToCoins = function(satoshis){
-        return parseFloat((satoshis / magnitude).toFixed(coinPrecision));
+        if (!Number.isSafeInteger(satoshis)) throw new Error('Unsafe monetary amount');
+        var value = parseFloat((satoshis / magnitude).toFixed(coinPrecision));
+        if (paymentMath.toUnits(Math.abs(value), coinPrecision) !== Math.abs(satoshis))
+            throw new Error('Amount cannot be represented exactly by wallet JSON-RPC');
+        return value;
     };
 
     var coinsToSatoshies = function(coins){
-        return Math.round(coins * magnitude);
+        return paymentMath.toUnits(coins, coinPrecision);
     };
 
     /* Deal with numbers in smallest possible units (satoshis) as much as possible. This greatly helps with accuracy
@@ -155,6 +167,9 @@ function SetupForPool(logger, poolOptions, setupFinished){
         if (processing || paymentsDisabled) return;
         processing = true;
         var paymentReceipt = null;
+        var cycleOwned = false;
+        var cycleToken = crypto.randomUUID();
+        var accountingStarted = false;
         var roundCounts = {pending: 0, immature: 0, mature: 0};
 
         var startPaymentProcess = Date.now();
@@ -172,6 +187,17 @@ function SetupForPool(logger, poolOptions, setupFinished){
         var endRPCTimer = function(){ timeSpentRPC += Date.now() - startTimeRPC };
 
         async.waterfall([
+            function(callback) {
+                // No lease expiry: a paused or crashed owner must never overlap another sender.
+                // A crash requires operator reconciliation before removal of this fence.
+                redisClient.set(coin + ':paymentCycleLock', cycleToken, 'NX', function(error, stored) {
+                    cycleOwned = !error && !!stored;
+                    if (error || !stored) return callback(error || new Error('Payment cycle locked; reconcile previous owner before unlocking'));
+                    redisClient.get(coin + ':paymentCommitPending', function(readError, pending) {
+                        callback(readError || (pending ? new Error('Unresolved accounting commit; manual reconciliation required') : null));
+                    });
+                });
+            },
 
             /* Call redis to get an array of rounds - which are coinbase transactions and block heights from submitted
                blocks. */
@@ -192,10 +218,13 @@ function SetupForPool(logger, poolOptions, setupFinished){
 
 
 
-                    var workers = {};
-                    for (var w in results[0]){
-                        workers[w] = {balance: coinsToSatoshies(parseFloat(results[0][w]))};
-                    }
+                    var workers = Object.create(null);
+                    try {
+                        for (var w in results[0]) {
+                            if (typeof results[0][w] !== 'string' || !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(results[0][w])) throw new Error('Invalid saved balance');
+                            workers[w] = {balance: coinsToSatoshies(results[0][w])};
+                        }
+                    } catch (e) { callback(e); return; }
 
                     roundCounts.pending = results[1].length;
                     var rounds = results[1].map(function(r){
@@ -351,6 +380,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         callback(new Error('Missing worker shares for round ' + missingRound.height + '; rewards remain pending'));
                         return;
                     }
+                    try {
                     rounds.forEach(function(round, i){
                         var workerShares = allWorkerShares[i];
 
@@ -371,13 +401,9 @@ function SetupForPool(logger, poolOptions, setupFinished){
                                    we owe each miner based on the shares they submitted during that block round. */
                                 var reward = coinsToSatoshies(round.reward);
 
-                                var totalShares = Object.keys(workerShares).reduce(function(p, c){
-                                    return p + parseFloat(workerShares[c])
-                                }, 0);
-
+                                var allocations = paymentMath.allocate(reward, workerShares);
                                 for (var workerAddress in workerShares){
-                                    var percent = parseFloat(workerShares[workerAddress]) / totalShares;
-                                    var workerRewardTotal = Math.floor(reward * percent);
+                                    var workerRewardTotal = allocations[workerAddress];
                                     var worker = workers[workerAddress] = (workers[workerAddress] || {});
                                     worker.reward = (worker.reward || 0) + workerRewardTotal;
                                 }
@@ -385,6 +411,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         }
                     });
 
+                    } catch (e) { callback(e); return; }
                     callback(null, workers, rounds, addressAccount);
                 });
             },
@@ -406,8 +433,10 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         worker.balance = worker.balance || 0;
                         worker.reward = worker.reward || 0;
                         var toSend = worker.balance + worker.reward;
+                        if (!Number.isSafeInteger(toSend) || toSend < 0) { callback(new Error('Unsafe worker amount')); return; }
                         if (toSend >= minPaymentSatoshis) {
                             totalSent += toSend;
+                            if (!Number.isSafeInteger(totalSent)) { callback(new Error('Unsafe payment total')); return; }
                             var address = worker.address = (worker.address || getProperAddress(w));
                             worker.sent = satoshisToCoins(toSend);
                             addressAmounts[address] = satoshisToCoins(
@@ -418,6 +447,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             worker.balanceChange = Math.max(toSend - worker.balance, 0);
                             worker.sent = 0;
                         }
+                        satoshisToCoins(worker.balanceChange);
                     }
 
                     if (Object.keys(addressAmounts).length === 0){
@@ -425,6 +455,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         return;
                     }
 
+                    satoshisToCoins(totalSent); // Validate the aggregate before any wallet call.
                     var journalKey = coin + ':paymentInFlight';
                     var journal = {id: 'pool-payment:' + crypto.randomUUID(), createdAt: Math.floor(Date.now() / 1000),
                         amounts: addressAmounts, workers: workers, rounds: rounds};
@@ -453,7 +484,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             }
                             daemon.cmd('gettransaction', [ids[0]], function(details) {
                                 var tx = details.response;
-                                if (details.error || !tx || tx.abandoned || tx.confirmations < 0 || (tx.walletconflicts || []).length) {
+                                if (details.error || !tx || !Number.isSafeInteger(tx.time) || tx.time < 0 || tx.abandoned || tx.confirmations < 0 || (tx.walletconflicts || []).length) {
                                     callback(new Error('Previous payment transaction requires reconciliation'));
                                     return;
                                 }
@@ -479,7 +510,30 @@ function SetupForPool(logger, poolOptions, setupFinished){
                                 if (readError) { callback(readError); return; }
                                 try {
                                     var saved = JSON.parse(value);
-                                    if (!saved || !saved.id || !saved.amounts || !saved.workers || !Array.isArray(saved.rounds)) throw new Error('Invalid journal');
+                                    if (!saved || !/^pool-payment:[a-f0-9-]{36}$/.test(saved.id) ||
+                                        !saved.amounts || !saved.workers || !Array.isArray(saved.rounds) ||
+                                        !Number.isSafeInteger(saved.createdAt) || saved.createdAt < 0 ||
+                                        !Object.keys(saved.amounts).length) throw new Error('Invalid journal');
+                                    var expected = Object.create(null), sum = 0;
+                                    Object.keys(saved.workers).forEach(function(name) {
+                                        var worker = saved.workers[name];
+                                        if (!worker || !Number.isSafeInteger(worker.balance) || worker.balance < 0 ||
+                                            !Number.isSafeInteger(worker.reward) || worker.reward < 0 ||
+                                            !Number.isSafeInteger(worker.balanceChange) || !Number.isFinite(worker.sent) || worker.sent < 0)
+                                            throw new Error('Invalid journal worker');
+                                        if (worker.sent > 0) {
+                                            var address = getProperAddress(name);
+                                            if (worker.address !== address) throw new Error('Invalid journal address');
+                                            var units = coinsToSatoshies(worker.sent);
+                                            if (units !== worker.balance + worker.reward || worker.balanceChange !== -worker.balance)
+                                                throw new Error('Invalid journal reward');
+                                            expected[address] = (expected[address] || 0) + units;
+                                            sum += units;
+                                        }
+                                    });
+                                    if (!Number.isSafeInteger(sum) || Object.keys(expected).length !== Object.keys(saved.amounts).length ||
+                                        Object.keys(expected).some(function(address) {return expected[address] !== coinsToSatoshies(saved.amounts[address]);}))
+                                        throw new Error('Invalid journal totals');
                                     recover(saved);
                                 }
                                 catch (_) { callback(new Error('Invalid saved payment journal; no transfer attempted')); }
@@ -494,7 +548,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         daemon.cmd('sendmany', sendParams, function(result) {
                             if (result.error) {
                                 logger.error(logSystem, logComponent, 'Error trying to send payments with RPC sendmany ' + JSON.stringify(result.error));
-                                if (Number.isInteger(result.error.code)) {
+                                if ([-3, -5, -6, -8, -13, -32602].includes(result.error.code)) {
                                     // A definite wallet rejection is safe to retry. Transport errors
                                     // retain the journal because the transaction may already exist.
                                     redisClient.del(journalKey, function(deleteError) {
@@ -511,7 +565,21 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         }, true, true);
                     });
                 };
-                trySend();
+                // Validate recipients with this wallet/network before preparing any transfer.
+                var recipients = Object.keys(workers).filter(function(name) {
+                    return (workers[name].balance || 0) + (workers[name].reward || 0) >= minPaymentSatoshis;
+                });
+                async.eachSeries(recipients, function(name, done) {
+                    var address;
+                    try { address = getProperAddress(name); } catch (_) { done(new Error('Invalid recipient')); return; }
+                    daemon.cmd('validateaddress', [address], function(result) {
+                        if (result.error || !result.response || result.response.isvalid !== true) return done(new Error('Invalid payment recipient'));
+                        done();
+                    }, true);
+                }, function(error) {
+                    if (error) { callback(error); return; }
+                    try { trySend(); } catch (e) { callback(e); }
+                });
 
             },
             function(workers, rounds, callback){
@@ -538,7 +606,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         if (paymentReceipt) workerPayoutsCommand.push(['hset', coin + ':paymentReceipts', w,
                             JSON.stringify({txid: paymentReceipt.txid, time: paymentReceipt.time, amount: worker.sent})]);
                         workerPayoutsCommand.push(['hincrbyfloat', coin + ':payouts', w, worker.sent]);
-                        totalPaid += worker.sent;
+                        totalPaid += coinsToSatoshies(worker.sent);
                     }
                 }
 
@@ -593,36 +661,53 @@ function SetupForPool(logger, poolOptions, setupFinished){
                 if (roundsToDelete.length > 0)
                     finalRedisCommands.push(['del'].concat(roundsToDelete));
 
-                if (paymentReceipt) finalRedisCommands.push(['del', coin + ':paymentInFlight']);
 
                 if (totalPaid !== 0)
-                    finalRedisCommands.push(['hincrbyfloat', coin + ':stats', 'totalPaid', totalPaid]);
+                    finalRedisCommands.push(['hincrbyfloat', coin + ':stats', 'totalPaid', satoshisToCoins(totalPaid)]);
 
                 if (finalRedisCommands.length === 0){
                     callback();
                     return;
                 }
 
+                if (paymentReceipt) finalRedisCommands.push(['del', coin + ':paymentInFlight']);
                 startRedisTimer();
+                // Persist the exact intended accounting before touching any ledger key.
+                accountingStarted = true;
+                redisClient.set(coin + ':paymentCommitPending', JSON.stringify({cycle: cycleToken,
+                    receipt: paymentReceipt, commands: finalRedisCommands}), 'NX', function(commitError, stored) {
+                    if (commitError || !stored) { paymentsDisabled = true; callback(commitError || new Error('Unresolved accounting commit')); return; }
                 redisClient.multi(finalRedisCommands).exec(function(error, results){
                     endRedisTimer();
+                    if (!error && (!Array.isArray(results) || results.some(function(result) { return result instanceof Error || (result && typeof result === 'object' && typeof result.message === 'string'); })))
+                        error = new Error('Redis accounting command failed; manual reconciliation required');
                     if (error){
                         paymentsDisabled = true;
                         clearInterval(paymentInterval);
                         logger.error(logSystem, logComponent,
                                 'Payments sent but could not update redis. ' + JSON.stringify(error)
                                 + ' Disabling payment processing to prevent possible double-payouts. The redis commands in '
-                                + coin + '_finalRedisCommands.txt must be ran manually');
-                        fs.writeFile(coin + '_finalRedisCommands.txt', JSON.stringify(finalRedisCommands), function(err){
-                            logger.error('Could not write finalRedisCommands.txt, you are fucked.');
+                                + coin + '_finalRedisCommands.txt are evidence for reconciliation; never replay them blindly');
+                        fs.writeFile(coin + '_finalRedisCommands.txt', JSON.stringify(finalRedisCommands), {mode: 0o600}, function(err){
+                            if (err) logger.error(logSystem, logComponent, 'Unable to save local recovery commands; preserve paymentCycleLock and reconcile Redis commit journal');
                         });
                     }
-                    callback(error);
+                    if (error) { callback(error); return; }
+                    redisClient.del(coin + ':paymentCommitPending', function(clearError) {
+                        if (clearError) paymentsDisabled = true;
+                        callback(clearError);
+                    });
+                });
                 });
             }
 
         ], function(error){
-            processing = false;
+            if (cycleOwned && !paymentsDisabled && !(error && accountingStarted)) {
+                redisClient.del(coin + ':paymentCycleLock', function(lockError) {
+                    if (lockError) { paymentsDisabled = true; clearInterval(paymentInterval); }
+                    processing = false;
+                });
+            } else processing = false;
             var status = {checkedAt: Math.floor(Date.now() / 1000),
                 status: error ? "error" : (paymentReceipt ? "paid" : "waiting"),
                 pending: roundCounts.pending, immature: roundCounts.immature, mature: roundCounts.mature,

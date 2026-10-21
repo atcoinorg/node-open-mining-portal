@@ -296,6 +296,11 @@ var processCoinSwitchCommand = function(params, options, reply){
         logger.error(logSystem, logComponent, msg);
     };
 
+    if (!portalConfig.switching || typeof portalConfig.switching !== 'object') {
+        replyError('Pool switching is not configured');
+        return;
+    }
+
     if (!params[0]) {
         replyError('Coin name required');
         return;
@@ -305,7 +310,7 @@ var processCoinSwitchCommand = function(params, options, reply){
         replyError('If switch key is not provided then algorithm options must be specified');
         return;
     }
-    else if (params[1] && !portalConfig.switching[params[1]]){
+    else if (params[1] && !Object.hasOwn(portalConfig.switching, params[1])){
         replyError('Switch key not recognized: ' + params[1]);
         return;
     }

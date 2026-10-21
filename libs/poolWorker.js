@@ -162,11 +162,16 @@ module.exports = function(logger){
         }
 
         var authorizeFN = function (ip, port, workerName, password, callback) {
+            if (typeof workerName !== 'string' || !/^[A-Za-z0-9_-][A-Za-z0-9.@+_-]{0,255}$/.test(workerName) ||
+                typeof password !== 'string' || password.length > 256) {
+                callback({error: null, authorized: false, disconnect: true});
+                return;
+            }
             handlers.auth(port, workerName, password, function(authorized){
 
                 var authString = authorized ? 'Authorized' : 'Unauthorized ';
 
-                logger.debug(logSystem, logComponent, logSubCat, authString + ' ' + workerName + ':' + password + ' [' + ip + ']');
+                logger.debug(logSystem, logComponent, logSubCat, authString + ' ' + JSON.stringify(workerName) + ' [' + ip + ']');
                 callback({
                     error: null,
                     authorized: authorized,

@@ -36,4 +36,5 @@ pool: up
 check:
 	$(COMPOSE) exec -T npm node scripts/check.js
 
-test: check
+test:
+	$(COMPOSE) exec -T npm npm test

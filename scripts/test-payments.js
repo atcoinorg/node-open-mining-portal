@@ -7,13 +7,15 @@ const txid = 'a'.repeat(64);
 async function run(options = {}) {
     const pool = {coin: {name: 'atcoin'}, address: 'pool', redis: {host: 'redis', port: 6379},
         paymentProcessing: {enabled: true, minimumPayment: 70, paymentInterval: 20, feeRate: 1, daemon: {path: '/wallet/test'}}};
-    let kickoff, tick, status, updates = [], sends = 0, recovery, journal = null;
+    let kickoff, tick, status, updates = [], sends = 0, recovery, journal = options.initialJournal || null;
+    let cycleLock = options.locked ? 'previous-owner' : null;
+    let commit = options.initialCommit || null;
     let complete;
     const done = new Promise(resolve => { complete = resolve; });
     function Daemon() {
         this.cmd = (method, args, callback) => {
             const reply = result => setImmediate(() => callback(result));
-            if (method === 'validateaddress') return reply({response: {ismine: true}});
+            if (method === 'validateaddress') return reply({response: {ismine: true, isvalid: !options.invalidAddress}});
             if (method === 'getbalance') return reply({data: options.balanceRaw || '{"result":0.00000000,"error":null,"id":1}'});
             if (method === 'listtransactions') return reply({response: options.recover ? [{category: 'send', txid, comment: JSON.parse(journal).id}] : []});
             if (method === 'gettransaction') return reply({response: {txid, time: 1234, confirmations: 0, details: [{category: 'send', address: 'wallet', amount: -1000}]}});
@@ -24,34 +26,36 @@ async function run(options = {}) {
             assert.equal(args[4].length, 0, "fees are paid by the pool, without reducing miner rewards");
             if (options.overlap) { tick(); tick(); }
             if (options.recover) return reply({error: {type: 'timeout', message: 'RPC deadline exceeded'}});
-            reply(options.sendError ? {error: typeof options.sendError === 'object' ? options.sendError : {code: -4, message: 'Wallet is locked'}} : {response: txid});
+            reply(options.sendError ? {error: typeof options.sendError === 'object' ? options.sendError : {code: -13, message: 'Wallet is locked'}} : {response: txid});
         };
         this.batchCmd = (calls, callback) => setImmediate(() => callback(null, [{result: {
             details: [{address: 'pool', category: options.immature ? 'immature' : 'generate', amount: options.reward || 1000}]
         }}]));
     }
     const redis = {createClient() { return {
+        on() {},
         hmset(key, fields, callback) { status = fields; callback(null); if (options.recover && fields.status === 'error') setImmediate(tick); else complete(); },
-        set(key, value, mode, callback) { assert.equal(mode, 'NX'); const stored = !journal; if (stored) journal = value; setImmediate(() => callback(null, stored ? 'OK' : null)); },
-        get(key, callback) { setImmediate(() => callback(null, journal)); },
-        del(key, callback) { journal = null; setImmediate(() => callback(null, 1)); },
+        set(key, value, mode, callback) { if (options.beforeRpcError) return setImmediate(() => callback(new Error('Redis unavailable'))); if (key.endsWith(':paymentCommitPending')) { if (options.commitError) return setImmediate(() => callback(new Error('Commit unavailable'))); commit = value; return setImmediate(() => callback(null, 'OK')); } if (key.endsWith(':paymentCycleLock')) { const stored = !cycleLock; if (stored) cycleLock = value; return setImmediate(() => callback(null, stored ? 'OK' : null)); } assert.equal(mode, 'NX'); const stored = !journal; if (stored) journal = value; setImmediate(() => callback(null, stored ? 'OK' : null)); },
+        get(key, callback) { setImmediate(() => callback(null, key.endsWith(':paymentCommitPending') ? commit : journal)); },
+        del(key, callback) { if (key.endsWith(':paymentCommitPending')) { commit = null; return callback(null, 1); } if (key.endsWith(':paymentCycleLock')) { cycleLock = null; return callback(null, 1); } journal = null; setImmediate(() => callback(null, 1)); },
         multi(commands) { return {exec(callback) {
             setImmediate(() => {
-                if (commands[0]?.[1] === 'atcoin:balances') return callback(null, [{}, ['block:coinbase:1']]);
-                if (commands[0]?.[0] === 'hgetall') return callback(null, [options.missingShares ? null : {'wallet.a': 1, 'wallet.b': 3}]);
+                if (commands[0]?.[1] === 'atcoin:balances') return callback(null, [options.balances || {}, ['block:coinbase:1']]);
+                if (commands[0]?.[0] === 'hgetall') return callback(null, [options.missingShares ? null : {'wallet.a': options.badShares ? -1 : 1, 'wallet.b': 3}]);
                 updates = commands;
                 if (!options.redisError && commands.some(c => c[0] === 'del' && c[1] === 'atcoin:paymentInFlight')) journal = null;
-                callback(options.redisError ? new Error('Redis disconnected') : null, commands.map(() => 1));
+                callback(options.redisError ? new Error('Redis disconnected') : null, commands.map((_, i) => options.commandError && i === 0 ? new Error('WRONGTYPE') : 1));
             });
         }}; }
     }; }};
     const sandbox = {module: {exports: {}}, process: {env: {pools: JSON.stringify({atcoin: pool})}},
         setInterval(f) { tick = f; return 1; }, clearInterval() {}, setTimeout(f) { kickoff = f; },
         require(name) {
+            if (name === './paymentMath') return require('../libs/paymentMath');
             if (name === 'redis') return redis;
             if (name === 'async') return async;
             if (name === 'crypto') return require('node:crypto');
-            if (name === 'fs') return {writeFile(file, body, callback) { recovery = JSON.parse(body); }};
+            if (name === 'fs') return {writeFile(file, body, options, callback) { recovery = JSON.parse(body); }};
             if (name === 'stratum-pool') return {daemon: {interface: Daemon}};
             if (name === 'stratum-pool/lib/util.js') return {};
             throw new Error(name);
@@ -63,7 +67,7 @@ async function run(options = {}) {
     kickoff();
     await done;
     if (options.redisError) { tick(); await new Promise(setImmediate); }
-    return {status, updates, sends, recovery, journal};
+    return {status, updates, sends, recovery, journal, commit, cycleLock};
 }
 
 (async () => {
@@ -116,5 +120,31 @@ async function run(options = {}) {
     assert.equal(result.sends, 1, 'failed accounting must disable further payments');
     assert.equal(result.status.status, 'error');
     assert.ok(result.recovery.length);
+    for (const options of [{beforeRpcError: true}, {locked: true}, {invalidAddress: true}, {badShares: true}, {reward: -10}, {reward: Infinity}, {reward: 1e12}, {initialCommit: 'unresolved'}, {balances: {'wallet.a': '-1'}}, {balances: {'wallet.a': 'NaN'}}, {balances: {'wallet.a': '9007199254740992'}}]) {
+        const rejected = await run(options);
+        assert.equal(rejected.sends, 0);
+        assert.equal(rejected.status.status, 'error');
+    }
+    result = await run({commandError: true});
+    assert.equal(result.status.status, 'error');
+    assert.equal(result.sends, 1);
+    assert.ok(result.commit, 'partial EXEC errors retain the accounting evidence');
+    assert.ok(result.cycleLock, 'partial EXEC errors retain the durable fence');
+    result = await run({commitError: true});
+    assert.equal(result.sends, 1);
+    assert.equal(result.status.status, 'error');
+    assert.ok(result.journal);
+    assert.ok(result.cycleLock);
+    result = await run({sendError: {type: 'timeout', message: 'RPC deadline exceeded'}});
+    const restart = await run({initialJournal: result.journal, recover: true});
+    assert.equal(restart.sends, 0, 'new processor reconciles a previous accepted transfer without sending');
+    assert.equal(restart.status.status, 'paid');
+    const unknownError = await run({sendError: {code: -4, message: 'Generic wallet failure'}});
+    assert.ok(unknownError.journal, 'generic wallet errors are not proof that no transaction exists');
+    const corrupted = JSON.parse(result.journal);
+    corrupted.workers['wallet.a'].sent = 9999;
+    const rejected = await run({initialJournal: JSON.stringify(corrupted)});
+    assert.equal(rejected.sends, 0);
+    assert.equal(rejected.status.status, 'error');
     console.log('Payments: maturity, weighted rewards, transaction receipts, overlap guard, rejected payments, minimum balance and Redis recovery OK');
 })().catch(error => { console.error(error); process.exitCode = 1; });

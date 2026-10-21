@@ -200,18 +200,9 @@ Array.prototype.forEach.call(document.querySelectorAll('input[type=text][readonl
 
 
 function isValidPrivateKey(str) {
-    if (str.length !== 64)
-        return false;
-
+    if (typeof str !== 'string' || !/^[a-f0-9]{64}$/i.test(str)) return false;
     str = str.toLowerCase();
-
-    var hexChars = '0123456789abcdef';
-    for (var i = 0; i < str.length; i++) {
-        if (hexChars.indexOf(str[i]) === -1) {
-            return false;
-        }
-    }
-    return true;
+    return str !== '0'.repeat(64) && str < 'fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141';
 }
 
 function $id(id) {
@@ -353,10 +344,6 @@ function populateCoinData() {
         secureRandom: function (count) {
             var nativeArr = new Uint8Array(count);
             window.crypto.getRandomValues(nativeArr);
-            for (var i = 0; i < nativeArr.length; i++) {
-                if (nativeArr[i] == 0)
-                    nativeArr[i] = Math.floor(Math.random() * (255 - 1 + 1)) + 255;
-            }
             return nativeArr;
         },
         byteArrayToHex: function (arr) {
@@ -397,7 +384,16 @@ function populateCoinData() {
 
     function Wallet(options) {
         options = options || {};
-        this.privateKey = options.privateKey ? util.hexToByteArray(options.privateKey) : util.secureRandom(32);
+        if (options.privateKey) {
+            if (!isValidPrivateKey(options.privateKey)) throw new Error('Invalid private key scalar');
+            this.privateKey = util.hexToByteArray(options.privateKey);
+        } else {
+            var attempts = 0;
+            do {
+                if (++attempts > 128) throw new Error('Unable to generate a valid private key');
+                this.privateKey = util.secureRandom(32);
+            } while (!isValidPrivateKey(util.byteArrayToHex(this.privateKey)));
+        }
         this.privateKeyHex = util.byteArrayToHex(this.privateKey);
         this.privateKeyInt = BigInteger(this.privateKeyHex, 16);
         this.compressed = !!options.compressed;

@@ -103,8 +103,10 @@ module.exports = function(logger, poolConfig){
 
     this.handleDifficultyUpdate = function(workerName, diff){
 
+        if (!Number.isFinite(diff) || diff <= 0) return;
         connection.query(
-            'UPDATE `pool_worker` SET `difficulty` = ' + diff + ' WHERE `username` = ' + connection.escape(workerName),
+            'UPDATE `pool_worker` SET `difficulty` = ? WHERE `username` = ?',
+            [diff, workerName],
             function(err, result){
                 if (err)
                     logger.error(logIdentify, logComponent, 'Error when updating worker diff: ' +

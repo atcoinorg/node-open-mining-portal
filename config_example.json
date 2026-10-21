@@ -41,7 +41,8 @@
         },
         "adminCenter": {
             "enabled": false,
-            "password": "password"
+            "password": "",
+            "secureCookies": true
         }
     },
 
