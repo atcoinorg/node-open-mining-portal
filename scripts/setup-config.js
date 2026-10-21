@@ -33,7 +33,15 @@ portal.website.port = number('WEBSITE_PORT');
 pool.address = required('ATCOIN_POOL_ADDRESS');
 pool.rewardRecipients = {[pool.address]: number('POOL_FEE_PERCENT')};
 pool.daemons = [rpc];
-pool.paymentProcessing.daemon = {...rpc, path: '/wallet/' + encodeURIComponent(required('ATCOIN_WALLET'))};
+pool.paymentProcessing.rpcTimeout ??= 120000;
+if (!Number.isFinite(pool.paymentProcessing.rpcTimeout) || pool.paymentProcessing.rpcTimeout <= 0)
+    throw new Error('Invalid payment RPC timeout');
+pool.paymentProcessing.daemon = {...rpc, timeout: pool.paymentProcessing.rpcTimeout,
+    path: '/wallet/' + encodeURIComponent(required('ATCOIN_WALLET'))};
+// ATCOIN sendmany accepts fee_rate in atomic units per virtual byte.
+pool.paymentProcessing.feeRate ??= 1;
+if (!Number.isFinite(pool.paymentProcessing.feeRate) || pool.paymentProcessing.feeRate <= 0)
+    throw new Error('Invalid payment feeRate');
 pool.ports = {[number('STRATUM_PORT')]: {diff: number('STRATUM_DIFFICULTY'), varDiff: JSON.parse(required('STRATUM_VARDIFF'))}};
 function write(file, data) {
     fs.mkdirSync(path.dirname(file), {recursive: true});

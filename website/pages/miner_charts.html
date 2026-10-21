@@ -14,5 +14,15 @@
 <section class="chartWrapper"><h2 class="chartLabel">Total paid · ATL</h2><svg id="minerPaid" aria-label="Cumulative payouts history"></svg></section>
 </div>
 <p class="chart-footnote">Rewards and payouts are snapshots, not earnings per interval. Missing historical reward values are shown as gaps.</p>
+<section class="card miner-payments" aria-labelledby="minerPaymentsHeading">
+<div class="payment-history-header">
+<h2 id="minerPaymentsHeading">Payment history</h2>
+<p>Paid amounts for this {{=it.type}}. Dates show when the wallet accepted the transfer, not its confirmation time. Full history is recorded from this update onward; earlier records may include only the latest payment.</p>
+<p id="minerPaymentsStatus" role="status">Loading payments…</p>
+</div>
+<div class="workers-toolbar"><label class="worker-page-size">Rows per page<select id="paymentLimit"><option>25</option><option>50</option><option>100</option><option>200</option></select></label></div>
+<div class="table-scroll" role="region" aria-label="Payment history" tabindex="0"><table class="workers-table"><thead><tr><th>Status</th><th>TX</th><th>Amount</th><th>Sent at</th></tr></thead><tbody id="minerPaymentsRows"></tbody></table></div>
+<div class="workers-pagination"><span id="paymentCount" role="status" aria-live="polite"></span><nav aria-label="Payment history pagination"><button id="paymentPrevious" type="button" disabled>← Previous</button><span id="paymentPage"></span><button id="paymentNext" type="button" disabled>Next →</button></nav></div>
+</section>
 </div>
 <script src="/static/miner-charts.js"></script>

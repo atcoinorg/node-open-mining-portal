@@ -50,7 +50,7 @@
 
 
 /* Shared ATCOIN portal theme. */
-:root { --primary: #4b0082; --primary-soft: #f2eaf8; --ink: #292332; --muted: #797181; --border: #e7e1ec; --surface: #fff; --background: #faf9fc; }
+:root { --card-padding: 20px; --content-gap: 12px; --primary: #4b0082; --primary-soft: #f2eaf8; --ink: #292332; --muted: #797181; --border: #e7e1ec; --surface: #fff; --background: #faf9fc; }
 * { box-sizing: border-box; }
 html { background: var(--background); overflow-y: scroll; }
 body { margin: 0; font: 15px/1.6 Arial, Helvetica, sans-serif; color: var(--ink); }
@@ -103,7 +103,7 @@ tr:hover td { background: #fcfaff; }
 #workersPage { padding: 0; color: var(--ink); }
 #workersPage h1 { font-size: 34px; font-weight: 700; }
 #workersPage .workers-note { color: var(--muted); margin-bottom: 32px; }
-#workersPage .workers-card-header { border-color: var(--border); padding: 20px; }
+#workersPage .workers-card-header { border-color: var(--border); padding: var(--card-padding); }
 #workersPage .workers-symbol, .badge { background: var(--primary-soft); color: var(--primary); border-radius: 5px; font-size: 11px; font-weight: 600; padding: 5px 9px; }
 #workersPage th { background: #f7f4fa; color: #796b86; }
 #workersPage td { border-color: var(--border); }
@@ -152,12 +152,12 @@ pre { margin: 18px 0 0; padding: 20px; background: #f6f2f9; border: 1px solid va
 #workersPage .workers-list th button { background: none; color: inherit; font: inherit; font-weight: 600; border: 0; padding: 0; cursor: pointer; white-space: normal; }
 #workersPage th[aria-sort="ascending"], #workersPage th[aria-sort="descending"] { color: var(--primary); }
 .worker-pool { color: var(--muted); font-size: 10px; }
-.workers-toolbar { padding: 20px; display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; border-bottom: 1px solid var(--border); }
+.workers-toolbar { padding: var(--card-padding); display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; border-bottom: 1px solid var(--border); }
 .workers-toolbar label { display: flex; flex-direction: column; gap: 8px; color: var(--muted); font-size: 12px; }
 .worker-search { flex: 1; max-width: 480px; }
 .workers-toolbar input, .workers-toolbar select { padding: 11px 12px; border: 1px solid var(--border); border-radius: 6px; background: white; color: var(--ink); font: inherit; font-size: 14px; min-height: 42px; }
 .workers-toolbar input:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
-.workers-pagination { padding: 18px 20px; display: flex; justify-content: space-between; align-items: center; gap: 20px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.workers-pagination { padding: 18px var(--card-padding); display: flex; justify-content: space-between; align-items: center; gap: 20px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
 .workers-pagination nav { display: flex; align-items: center; gap: 16px; }
 .workers-pagination button { padding: 8px 12px; border: 1px solid var(--border); background: white; border-radius: 6px; color: var(--primary); cursor: pointer; }
 .workers-pagination button:disabled { opacity: .4; cursor: default; }
@@ -176,3 +176,24 @@ pre { margin: 18px 0 0; padding: 20px; background: #f6f2f9; border: 1px solid va
     #workersPage .workers-list tbody .workers-empty { display: block; text-align: center; }
     #workersPage .workers-list .workers-empty::before { content: none; }
 }
+
+.workers-payments { overflow-wrap: anywhere; }
+.worker-payment-detail { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; font-weight: 400; }
+
+@media (max-width: 760px) { #workersPage .worker-payment-detail { grid-column: 2; } }
+
+/* Payment history uses the shared card, table, and pagination components. */
+.payment-history-header { padding: var(--card-padding); }
+.payment-history-header h2,
+.payment-history-header p { margin: 0 0 var(--content-gap); }
+.payment-history-header #minerPaymentsStatus { font-size: 12px; color: var(--muted); }
+/* Keep the same spacing for pages served from the existing template cache. */
+.miner-payments > h2 { margin: 0; padding: var(--card-padding) var(--card-padding) 0; }
+.miner-payments > p { margin: var(--content-gap) var(--card-padding); }
+.miner-payments > #minerPaymentsStatus { margin-bottom: var(--card-padding); font-size: 12px; color: var(--muted); }
+.payment-history-header p:last-child { margin-bottom: 0; }
+.miner-payments { overflow: hidden; }
+.miner-payments .workers-toolbar { border-top: 1px solid var(--border); }
+.miner-payments td:nth-child(3), .miner-payments td:nth-child(4) { white-space: nowrap; }
+.miner-payments .table-scroll { max-width: 100%; }
+.workers-pagination button:focus-visible, .worker-page-size select:focus-visible { outline: 3px solid #a675cb; outline-offset: 3px; }

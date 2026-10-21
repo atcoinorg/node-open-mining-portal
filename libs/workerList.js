@@ -15,6 +15,7 @@ module.exports = function(stats, query) {
                 address: dot < 0 ? name : name.slice(0, dot), pool: coin, symbol: pool.symbol,
                 shares: Number(w.shares || 0), invalidShares: Number(w.invalidshares || 0),
                 hashrate: w.hashrateString, immature: typeof w.immature === 'number' ? w.immature : null,
+                balance: Number(w.balance || 0), lastPayment: w.lastPayment || null,
                 paid: Number(w.paid || 0)});
         });
     });
@@ -28,5 +29,8 @@ module.exports = function(stats, query) {
     var pages = Math.max(1, Math.ceil(total / limit));
     page = Math.min(page, pages);
     return {rows: rows.slice((page - 1) * limit, page * limit), total: total, page: page,
+        payments: Object.keys(stats.pools || {}).map(function(coin) {
+            return {pool: coin, symbol: stats.pools[coin].symbol, status: stats.pools[coin].payments || {}};
+        }),
         pages: pages, limit: limit, sort: sort, direction: direction, search: String(query.search || '').trim()};
 };

@@ -403,6 +403,12 @@ Description of options:
            payments less frequently (they dislike). Opposite for a lower minimum payment. */
         "minimumPayment": 0.01,
 
+        /* ATCOIN transaction fee rate in atomic units per virtual byte (sat/vB).
+           Increase this number to raise the fee. The pool wallet pays the fee;
+           miner rewards are not reduced. With environment-generated configuration,
+           set POOL__paymentProcessing__feeRate in .env instead. */
+        "feeRate": 2,
+
         /* This daemon is used to send out payments. It MUST be for the daemon that owns the
            configured 'address' that receives the block rewards, otherwise the daemon will not
            be able to confirm blocks or send out payments. */

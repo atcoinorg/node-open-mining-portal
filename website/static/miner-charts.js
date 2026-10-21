@@ -15,8 +15,45 @@ $(function() {
         {id: 'minerImmature', key: 'immature', label: 'Immature ATL', format: number},
         {id: 'minerPaid', key: 'paid', label: 'Paid ATL', format: number}
     ];
+    var payments = [], paymentPage = 1, paymentLimit = 25;
+    function renderPayments() {
+        var pages = Math.max(1, Math.ceil(payments.length / paymentLimit));
+        paymentPage = Math.min(paymentPage, pages);
+            var body = document.getElementById('minerPaymentsRows');
+            body.textContent = '';
+            document.getElementById('minerPaymentsStatus').textContent = payments.length ? payments.length + ' payment(s)' : 'No recorded payments for this ' + query.type + '.';
+            payments.slice((paymentPage - 1) * paymentLimit, paymentPage * paymentLimit).forEach(function(payment) {
+                var row = document.createElement('tr');
+                ['Paid', payment.txid, number(payment.amount) + ' ' + (payment.symbol || payment.pool),
+                    new Date(payment.time * 1000).toLocaleString()].forEach(function(value, index) {
+                    var cell = document.createElement('td');
+                    cell.textContent = value;
+                    if (index === 1) cell.style.overflowWrap = 'anywhere';
+                    row.appendChild(cell);
+                });
+                body.appendChild(row);
+            });
+        document.getElementById('paymentCount').textContent = payments.length ?
+            ((paymentPage - 1) * paymentLimit + 1) + '–' + Math.min(paymentPage * paymentLimit, payments.length) + ' of ' + payments.length : '0 payments';
+        document.getElementById('paymentPage').textContent = 'Page ' + paymentPage + ' of ' + pages;
+        document.getElementById('paymentPrevious').disabled = paymentPage <= 1;
+        document.getElementById('paymentNext').disabled = paymentPage >= pages;
+    }
+    document.getElementById('paymentLimit').addEventListener('change', function() {
+        paymentLimit = Number(this.value);
+        paymentPage = 1;
+        renderPayments();
+    });
+    document.getElementById('paymentPrevious').addEventListener('click', function() {
+        if (paymentPage > 1) { paymentPage--; renderPayments(); }
+    });
+    document.getElementById('paymentNext').addEventListener('click', function() {
+        if (paymentPage * paymentLimit < payments.length) { paymentPage++; renderPayments(); }
+    });
     function load() {
         $.getJSON('/api/miner_stats', query).done(function(data) {
+            payments = data.payments || [];
+            renderPayments();
             var status = document.getElementById('minerChartStatus');
             status.textContent = data.workers.length ? (data.type === 'address' ? data.workers.length + ' worker(s) included. ' : '') + 'Updates automatically with pool statistics.' : 'No mining history found for this ' + data.type + '.';
             var latest = data.points[data.points.length - 1];
@@ -45,6 +82,7 @@ $(function() {
                 d3.select('#' + config.id).datum(series).call(charts[config.id]);
             });
         }).fail(function(xhr) {
+            document.getElementById('minerPaymentsStatus').textContent = 'Unable to load payment history. Please refresh.';
             document.getElementById('minerChartStatus').textContent = xhr.responseJSON && xhr.responseJSON.error || 'Unable to load mining history. Please refresh.';
         });
     }

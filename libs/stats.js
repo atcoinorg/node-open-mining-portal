@@ -136,7 +136,11 @@ module.exports = function(logger, portalConfig, poolConfigs){
                 ['scard', ':blocksPending'],
                 ['scard', ':blocksConfirmed'],
                 ['scard', ':blocksKicked'],
-                ['hgetall', ':payouts']
+                ['hgetall', ':payouts'],
+                ['hgetall', ':balances'],
+                ['hgetall', ':paymentReceipts'],
+                ['hgetall', ':paymentStatus'],
+                ['hgetall', ':paymentHistory']
             ];
 
             var commandsPerCoin = redisCommandTemplates.length;
@@ -164,6 +168,13 @@ module.exports = function(logger, portalConfig, poolConfigs){
                             algorithm: poolConfigs[coinName].coin.algorithm,
                             hashrates: replies[i + 1],
                             workerPayouts: replies[i + 6] || {},
+                            workerBalances: replies[i + 7] || {},
+                            workerReceipts: replies[i + 8] || {},
+                            payments: replies[i + 9] || {},
+                            paymentHistory: Object.values(replies[i + 10] || {}).reduce(function(rows, value) {
+                                try { rows.push(JSON.parse(value)); } catch (_) {}
+                                return rows;
+                            }, []),
                             poolStats: {
                                 validShares: replies[i + 2] ? (replies[i + 2].validShares || 0) : 0,
                                 validBlocks: replies[i + 2] ? (replies[i + 2].validBlocks || 0) : 0,
@@ -237,17 +248,24 @@ module.exports = function(logger, portalConfig, poolConfigs){
 
                 var immature = coinStats.immatureRewards;
                 var payouts = coinStats.workerPayouts;
-                Object.keys(Object.assign({}, immature || {}, payouts)).forEach(function(worker) {
+                var balances = coinStats.workerBalances;
+                var receipts = coinStats.workerReceipts;
+                Object.keys(Object.assign({}, immature || {}, payouts, balances, receipts)).forEach(function(worker) {
                     if (!coinStats.workers[worker]) coinStats.workers[worker] = {
                         shares: 0, invalidshares: 0, hashrateString: null
                     };
                 });
                 Object.keys(coinStats.workers).forEach(function(worker) {
+                    coinStats.workers[worker].balance = Number(balances[worker] || 0);
+                    try { coinStats.workers[worker].lastPayment = JSON.parse(receipts[worker] || 'null'); }
+                    catch (_) { coinStats.workers[worker].lastPayment = null; }
                     coinStats.workers[worker].paid = Number(payouts[worker] || 0);
                     coinStats.workers[worker].immature = immature === null ? null : (immature[worker] || 0);
                 });
                 delete coinStats.immatureRewards;
                 delete coinStats.workerPayouts;
+                delete coinStats.workerBalances;
+                delete coinStats.workerReceipts;
 
                 var shareMultiplier = Math.pow(2, 32) / algos[coinStats.algorithm].multiplier;
                 coinStats.hashrate = shareMultiplier * coinStats.shares / portalConfig.website.stats.hashrateWindow;
@@ -286,7 +304,14 @@ module.exports = function(logger, portalConfig, poolConfigs){
 
 
 
-            _this.statHistory.push(portalStats);
+            // Payment records have their own durable store; do not duplicate the
+            // complete ledger in every chart snapshot.
+            var historySnapshot = Object.assign({}, portalStats, {pools: {}});
+            Object.keys(portalStats.pools).forEach(function(coin) {
+                historySnapshot.pools[coin] = Object.assign({}, portalStats.pools[coin]);
+                delete historySnapshot.pools[coin].paymentHistory;
+            });
+            _this.statHistory.push(historySnapshot);
             addStatPoolHistory(portalStats);
 
             var retentionTime = (((Date.now() / 1000) - portalConfig.website.stats.historicalRetention) | 0);
@@ -302,7 +327,7 @@ module.exports = function(logger, portalConfig, poolConfigs){
             }
 
             redisStats.multi([
-                ['zadd', 'statHistory', statGatherTime, _this.statsString],
+                ['zadd', 'statHistory', statGatherTime, JSON.stringify(historySnapshot)],
                 ['zremrangebyscore', 'statHistory', '-inf', '(' + retentionTime]
             ]).exec(function(err, replies){
                 if (err)

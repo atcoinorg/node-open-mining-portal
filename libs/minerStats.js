@@ -12,6 +12,29 @@ module.exports = function(history, current, type, id, address, window) {
     if (current && current.time && !snapshots.some(function(s) { return s.time === current.time; })) snapshots.push(current);
     snapshots.sort(function(a, b) { return a.time - b.time; });
     var names = new Set();
+    var receipts = {};
+    Object.keys((current && current.pools) || {}).forEach(function(coin) {
+        var pool = current.pools[coin];
+        var rows = (pool.paymentHistory || []).slice();
+        Object.keys(pool.workers || {}).forEach(function(name) {
+            var receipt = pool.workers[name].lastPayment;
+            if (receipt) rows.push(Object.assign({worker: name}, receipt));
+        });
+        rows.forEach(function(row) {
+            if (!row || typeof row.worker !== 'string' || !matches(row.worker) ||
+                !/^[a-f0-9]{64}$/i.test(row.txid) || !Number.isFinite(row.amount) || !Number.isFinite(row.time)) return;
+            names.add(row.worker);
+            var key = coin + ':' + row.txid;
+            var entry = receipts[key] || (receipts[key] = {pool: coin, symbol: pool.symbol,
+                txid: row.txid, time: row.time, amount: 0, workers: {}});
+            entry.workers[row.worker] = row.amount;
+        });
+    });
+    var payments = Object.values(receipts).map(function(entry) {
+        entry.amount = Object.values(entry.workers).reduce(function(sum, amount) { return sum + amount; }, 0);
+        delete entry.workers;
+        return entry;
+    }).sort(function(a, b) { return b.time - a.time || a.txid.localeCompare(b.txid); });
     snapshots.forEach(function(s) {
         Object.keys(s.pools || {}).forEach(function(coin) {
             Object.keys(s.pools[coin].workers || {}).forEach(function(name) { if (matches(name)) names.add(name); });
@@ -40,5 +63,5 @@ module.exports = function(history, current, type, id, address, window) {
         });
         return point;
     });
-    return {type: type, id: id, address: address || null, workers: Array.from(names), points: points, window: window};
+    return {type: type, id: id, address: address || null, workers: Array.from(names), points: points, window: window, payments: payments};
 };

@@ -28,6 +28,22 @@ $(function() {
         tbody.setAttribute('aria-busy', 'true');
         request = $.getJSON('/api/workers', state).done(function(data) {
             state.page = data.page; state.sort = data.sort; state.direction = data.direction; state.limit = data.limit;
+            var paymentStatus = document.getElementById('workerPayments');
+            paymentStatus.textContent = '';
+            (data.payments || []).forEach(function(payment) {
+                var status = payment.status;
+                var message = document.createElement('p');
+                message.className = 'workers-note';
+                var text = payment.pool + ': ';
+                if (status.status === 'error') text += 'Payment error: ' + status.message;
+                else if (Number(status.immature) > 0) text += status.immature + ' blocks awaiting maturity.';
+                else if (status.checkedAt) text += 'Payment check completed.';
+                else text += 'Waiting for payment status.';
+                if (status.lastTxid) text += ' Last payment: ' + Number(status.lastAmount).toFixed(8) + ' ' + payment.symbol +
+                    ' · ' + new Date(Number(status.lastPaidAt) * 1000).toLocaleString() + ' · TX: ' + status.lastTxid;
+                message.textContent = text;
+                paymentStatus.appendChild(message);
+            });
             tbody.textContent = '';
             data.rows.forEach(function(w) {
                 var row = document.createElement('tr');
@@ -38,8 +54,21 @@ $(function() {
                 cell(row, Math.floor(w.shares)); cell(row, Math.floor(w.invalidShares));
                 cell(row, (w.shares > 0 ? Math.floor(10000 * w.shares / (w.shares + w.invalidShares)) / 100 : 0) + '%');
                 cell(row, w.hashrate || '0.00 KH');
-                cell(row, w.immature === null ? '—' : w.immature.toFixed(8), 'worker-reward');
-                cell(row, w.paid.toFixed(8), 'worker-reward');
+                var immature = cell(row, w.immature === null ? '—' : w.immature.toFixed(8), 'worker-reward');
+                if (w.balance > 0) {
+                    var available = document.createElement('small');
+                    available.className = 'worker-payment-detail';
+                    available.textContent = 'Available: ' + w.balance.toFixed(8);
+                    immature.appendChild(available);
+                }
+                var paid = cell(row, w.paid.toFixed(8), 'worker-reward');
+                if (w.lastPayment) {
+                    var receipt = document.createElement('small');
+                    receipt.className = 'worker-payment-detail';
+                    receipt.textContent = 'TX: ' + w.lastPayment.txid.slice(0, 12) + '…';
+                    receipt.title = w.lastPayment.txid + ' · ' + new Date(w.lastPayment.time * 1000).toLocaleString();
+                    paid.appendChild(receipt);
+                }
                 tbody.appendChild(row);
             });
             if (!data.rows.length) { var row = document.createElement('tr'); var td = cell(row, 'No workers match your search.', 'workers-empty'); td.colSpan = 8; tbody.appendChild(row); }

@@ -13,7 +13,7 @@ function collect(shares) {
     const fakeRedis = {createClient() {
         const history = connections++ === 0;
         return {on() {}, zrangebyscore(args, callback) { callback(null, [JSON.stringify(old)]); },
-            multi() { return {exec(callback) { callback(null, history ? [] : [0, shares, {}, 33, 0, 0, {paidOnly: '5'}]); }}; }};
+            multi() { return {exec(callback) { callback(null, history ? [] : [0, shares, {}, 33, 0, 0, {paidOnly: '5'}, {balanceOnly: '20'}, {paidOnly: JSON.stringify({txid: 'a'.repeat(64), time: 1000, amount: 5})}, {status: 'paid', lastTxid: 'a'.repeat(64)}]); }}; }};
     }};
     const sandbox = {module: {exports: {}}, require(name) {
         if (name === 'redis') return fakeRedis;
@@ -31,6 +31,19 @@ function collect(shares) {
 }
 
 (async () => {
+    const minerStats = require('../libs/minerStats.js');
+    const txid = 'b'.repeat(64);
+    const record = (worker, amount) => ({worker, amount, txid, time: 1234});
+    const current = {time: 1235, pools: {atcoin: {algorithm: 'scrypt', symbol: 'ATL',
+        workers: {'wallet.one': {lastPayment: record('wallet.one', 10)}, 'wallet.two': {}},
+        paymentHistory: [record('wallet.one', 10), record('wallet.two', 20), record('other.one', 50)]}}};
+    const addressPayments = minerStats([], current, 'address', 'wallet', null, 300).payments;
+    assert.equal(addressPayments.length, 1, 'group one transaction across address workers');
+    assert.equal(addressPayments[0].amount, 30, 'deduplicate latest receipt and exclude other addresses');
+    const workerPayments = minerStats([], current, 'worker', 'one', 'wallet', 300).payments;
+    assert.equal(workerPayments.length, 1);
+    assert.equal(workerPayments[0].amount, 10, 'worker sees only its own part of the transfer');
+    assert.throws(() => minerStats([], current, 'worker', 'one', null, 300), /multiple addresses/);
     const idle = await collect([]);
     assert.equal(idle.pools.atcoin.workerCount, 0);
     assert.equal(idle.global.workers, 0);
@@ -39,6 +52,12 @@ function collect(shares) {
     assert.equal(idle.pools.atcoin.blocks.pending, 33, 'pending balance survives downtime');
     assert.equal(idle.pools.atcoin.workers.rewardOnly.immature, 12, 'keep reward history visible');
     assert.equal(idle.pools.atcoin.workers.paidOnly.paid, 5);
+    assert.equal(idle.pools.atcoin.workers.balanceOnly.balance, 20);
+    assert.equal(idle.pools.atcoin.workers.paidOnly.lastPayment.txid, 'a'.repeat(64));
+    const list = require('../libs/workerList.js')(idle, {});
+    assert.equal(list.payments[0].status.status, 'paid');
+    assert.equal(list.rows.find(w => w.name === 'paidOnly').lastPayment.amount, 5);
+    assert.equal(list.rows.find(w => w.name === 'balanceOnly').balance, 20);
     const active = await collect(['8:miner:1', '-2:invalidMiner:2']);
     assert.equal(active.pools.atcoin.workerCount, 2);
     assert.equal(active.algos.scrypt.workers, 2);

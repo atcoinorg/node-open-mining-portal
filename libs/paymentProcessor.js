@@ -1,4 +1,5 @@
 var fs = require('fs');
+var crypto = require('crypto');
 
 var redis = require('redis');
 var async = require('async');
@@ -51,6 +52,13 @@ function SetupForPool(logger, poolOptions, setupFinished){
     var logSystem = 'Payments';
     var logComponent = coin;
 
+    if (processingConfig.feeRate != null &&
+        (!Number.isFinite(processingConfig.feeRate) || processingConfig.feeRate <= 0)) {
+        logger.error(logSystem, logComponent, 'paymentProcessing.feeRate must be a positive number in atomic units per virtual byte');
+        setupFinished(false);
+        return;
+    }
+
     var daemon = new Stratum.daemon.interface([processingConfig.daemon], function(severity, message){
         logger[severity](logSystem, logComponent, message);
     });
@@ -61,6 +69,8 @@ function SetupForPool(logger, poolOptions, setupFinished){
     var coinPrecision;
 
     var paymentInterval;
+    var processing = false;
+    var paymentsDisabled = false;
 
     async.parallel([
         function(callback){
@@ -98,14 +108,14 @@ function SetupForPool(logger, poolOptions, setupFinished){
                     return;
                 }
                 try {
-                    var d = result.data.split('result":')[1].split(',')[0].split('.')[1];
-                    magnitude = parseInt('10' + new Array(d.length).join('0'));
-                    minPaymentSatoshis = parseInt(processingConfig.minimumPayment * magnitude);
-                    coinPrecision = magnitude.toString().length - 1;
+                    coinPrecision = poolOptions.coin.precision == null ? 8 : poolOptions.coin.precision;
+                    if (!Number.isInteger(coinPrecision) || coinPrecision < 0 || coinPrecision > 8) throw new Error('Invalid coin precision');
+                    magnitude = Math.pow(10, coinPrecision);
+                    minPaymentSatoshis = Math.round(processingConfig.minimumPayment * magnitude);
                     callback();
                 }
                 catch(e){
-                    logger.error(logSystem, logComponent, 'Error detecting number of satoshis in a coin, cannot do payment processing. Tried parsing: ' + result.data);
+                    logger.error(logSystem, logComponent, 'Invalid payment precision: ' + e.message);
                     callback(true);
                 }
 
@@ -135,13 +145,17 @@ function SetupForPool(logger, poolOptions, setupFinished){
     };
 
     var coinsToSatoshies = function(coins){
-        return coins * magnitude;
+        return Math.round(coins * magnitude);
     };
 
     /* Deal with numbers in smallest possible units (satoshis) as much as possible. This greatly helps with accuracy
        when rounding and whatnot. When we are storing numbers for only humans to see, store in whole coin units. */
 
     var processPayments = function(){
+        if (processing || paymentsDisabled) return;
+        processing = true;
+        var paymentReceipt = null;
+        var roundCounts = {pending: 0, immature: 0, mature: 0};
 
         var startPaymentProcess = Date.now();
 
@@ -155,7 +169,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
         var endRedisTimer = function(){ timeSpentRedis += Date.now() - startTimeRedis };
 
         var startRPCTimer = function(){ startTimeRPC = Date.now(); };
-        var endRPCTimer = function(){ timeSpentRPC += Date.now() - startTimeRedis };
+        var endRPCTimer = function(){ timeSpentRPC += Date.now() - startTimeRPC };
 
         async.waterfall([
 
@@ -183,6 +197,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         workers[w] = {balance: coinsToSatoshies(parseFloat(results[0][w]))};
                     }
 
+                    roundCounts.pending = results[1].length;
                     var rounds = results[1].map(function(r){
                         var details = r.split(':');
                         return {
@@ -268,6 +283,8 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         }
 
                         round.category = generationTx.category;
+                        if (round.category === 'immature') roundCounts.immature++;
+                        if (round.category === 'generate') roundCounts.mature++;
                         if (round.category === 'generate') {
                             round.reward = generationTx.amount || generationTx.value;
                         }
@@ -327,6 +344,13 @@ function SetupForPool(logger, poolOptions, setupFinished){
                     }
 
 
+                    var missingRound = rounds.find(function(round, i) {
+                        return !allWorkerShares[i] || !Object.keys(allWorkerShares[i]).length;
+                    });
+                    if (missingRound) {
+                        callback(new Error('Missing worker shares for round ' + missingRound.height + '; rewards remain pending'));
+                        return;
+                    }
                     rounds.forEach(function(round, i){
                         var workerShares = allWorkerShares[i];
 
@@ -345,7 +369,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             case 'generate':
                                 /* We found a confirmed block! Now get the reward for it and calculate how much
                                    we owe each miner based on the shares they submitted during that block round. */
-                                var reward = parseInt(round.reward * magnitude);
+                                var reward = coinsToSatoshies(round.reward);
 
                                 var totalShares = Object.keys(workerShares).reduce(function(p, c){
                                     return p + parseFloat(workerShares[c])
@@ -374,14 +398,14 @@ function SetupForPool(logger, poolOptions, setupFinished){
              */
             function(workers, rounds, addressAccount, callback) {
 
-                var trySend = function (withholdPercent) {
+                var trySend = function () {
                     var addressAmounts = {};
                     var totalSent = 0;
                     for (var w in workers) {
                         var worker = workers[w];
                         worker.balance = worker.balance || 0;
                         worker.reward = worker.reward || 0;
-                        var toSend = (worker.balance + worker.reward) * (1 - withholdPercent);
+                        var toSend = worker.balance + worker.reward;
                         if (toSend >= minPaymentSatoshis) {
                             totalSent += toSend;
                             var address = worker.address = (worker.address || getProperAddress(w));
@@ -401,32 +425,93 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         return;
                     }
 
-                    daemon.cmd('sendmany', [addressAccount || '', addressAmounts], function (result) {
-                        //Check if payments failed because wallet doesn't have enough coins to pay for tx fees
-                        if (result.error && result.error.code === -6) {
-                            var higherPercent = withholdPercent + 0.01;
-                            logger.warning(logSystem, logComponent, 'Not enough funds to cover the tx fees for sending out payments, decreasing rewards by '
-                                + (higherPercent * 100) + '% and retrying');
-                            trySend(higherPercent);
-                        }
-                        else if (result.error) {
-                            logger.error(logSystem, logComponent, 'Error trying to send payments with RPC sendmany '
-                                + JSON.stringify(result.error));
-                            callback(true);
-                        }
-                        else {
-                            logger.debug(logSystem, logComponent, 'Sent out a total of ' + (totalSent / magnitude)
-                                + ' to ' + Object.keys(addressAmounts).length + ' workers');
-                            if (withholdPercent > 0) {
-                                logger.warning(logSystem, logComponent, 'Had to withhold ' + (withholdPercent * 100)
-                                    + '% of reward from miners to cover transaction fees. '
-                                    + 'Fund pool wallet with coins to prevent this from happening');
+                    var journalKey = coin + ':paymentInFlight';
+                    var journal = {id: 'pool-payment:' + crypto.randomUUID(), createdAt: Math.floor(Date.now() / 1000),
+                        amounts: addressAmounts, workers: workers, rounds: rounds};
+
+                    function accepted(txid, time, saved) {
+                        paymentReceipt = {txid: txid, time: time, amount: Object.keys(saved.amounts).reduce(function(total, address) {
+                            return total + coinsToSatoshies(saved.amounts[address]);
+                        }, 0) / magnitude};
+                        logger.debug(logSystem, logComponent, 'Payment transaction ' + txid + ': ' + paymentReceipt.amount);
+                        callback(null, saved.workers, saved.rounds);
+                    }
+                    function recover(saved) {
+                        // A timed-out send can still have reached the wallet. Search by the
+                        // durable unique comment before considering another transaction.
+                        daemon.cmd('listtransactions', ['*', 1000, 0], function(result) {
+                            if (result.error || !Array.isArray(result.response)) {
+                                callback(new Error('Unable to reconcile previous payment; no new transfer attempted'));
+                                return;
                             }
-                            callback(null, workers, rounds);
+                            var ids = Array.from(new Set(result.response.filter(function(tx) {
+                                return tx.category === 'send' && tx.comment === saved.id;
+                            }).map(function(tx) { return tx.txid; })));
+                            if (ids.length !== 1) {
+                                callback(new Error('Previous payment response is unknown; waiting for wallet reconciliation, no new transfer attempted'));
+                                return;
+                            }
+                            daemon.cmd('gettransaction', [ids[0]], function(details) {
+                                var tx = details.response;
+                                if (details.error || !tx || tx.abandoned || tx.confirmations < 0 || (tx.walletconflicts || []).length) {
+                                    callback(new Error('Previous payment transaction requires reconciliation'));
+                                    return;
+                                }
+                                var actual = {};
+                                (tx.details || []).filter(function(d) { return d.category === 'send'; }).forEach(function(d) {
+                                    actual[d.address] = (actual[d.address] || 0) + coinsToSatoshies(-d.amount);
+                                });
+                                var addresses = Object.keys(saved.amounts);
+                                if (addresses.length !== Object.keys(actual).length || addresses.some(function(address) {
+                                    return actual[address] !== coinsToSatoshies(saved.amounts[address]);
+                                })) {
+                                    callback(new Error('Previous payment outputs do not match saved rewards'));
+                                    return;
+                                }
+                                accepted(ids[0], tx.time, saved);
+                            }, true);
+                        }, true);
+                    }
+                    redisClient.set(journalKey, JSON.stringify(journal), 'NX', function(error, stored) {
+                        if (error) { callback(error); return; }
+                        if (!stored) {
+                            redisClient.get(journalKey, function(readError, value) {
+                                if (readError) { callback(readError); return; }
+                                try {
+                                    var saved = JSON.parse(value);
+                                    if (!saved || !saved.id || !saved.amounts || !saved.workers || !Array.isArray(saved.rounds)) throw new Error('Invalid journal');
+                                    recover(saved);
+                                }
+                                catch (_) { callback(new Error('Invalid saved payment journal; no transfer attempted')); }
+                            });
+                            return;
                         }
-                    }, true, true);
+                        var sendParams = [addressAccount || '', addressAmounts, 1, journal.id];
+                        if (processingConfig.feeRate != null) {
+                            // Explicit sat/vB avoids failures when wallet fee estimation has no data.
+                            sendParams.push([], null, null, 'unset', processingConfig.feeRate);
+                        }
+                        daemon.cmd('sendmany', sendParams, function(result) {
+                            if (result.error) {
+                                logger.error(logSystem, logComponent, 'Error trying to send payments with RPC sendmany ' + JSON.stringify(result.error));
+                                if (Number.isInteger(result.error.code)) {
+                                    // A definite wallet rejection is safe to retry. Transport errors
+                                    // retain the journal because the transaction may already exist.
+                                    redisClient.del(journalKey, function(deleteError) {
+                                        callback(deleteError || new Error(result.error.message || 'Wallet rejected payment'));
+                                    });
+                                } else callback(new Error('Wallet response unknown: ' + result.error.message + '; payment saved for reconciliation'));
+                                return;
+                            }
+                            if (typeof result.response !== 'string' || !/^[a-f0-9]{64}$/i.test(result.response)) {
+                                callback(new Error('Wallet returned no valid transaction ID; payment saved for reconciliation'));
+                                return;
+                            }
+                            accepted(result.response, Math.floor(Date.now() / 1000), journal);
+                        }, true, true);
+                    });
                 };
-                trySend(0);
+                trySend();
 
             },
             function(workers, rounds, callback){
@@ -447,6 +532,11 @@ function SetupForPool(logger, poolOptions, setupFinished){
                         ]);
                     }
                     if (worker.sent !== 0){
+                        if (paymentReceipt) workerPayoutsCommand.push(['hset', coin + ':paymentHistory',
+                            paymentReceipt.txid + ':' + w,
+                            JSON.stringify({worker: w, txid: paymentReceipt.txid, time: paymentReceipt.time, amount: worker.sent})]);
+                        if (paymentReceipt) workerPayoutsCommand.push(['hset', coin + ':paymentReceipts', w,
+                            JSON.stringify({txid: paymentReceipt.txid, time: paymentReceipt.time, amount: worker.sent})]);
                         workerPayoutsCommand.push(['hincrbyfloat', coin + ':payouts', w, worker.sent]);
                         totalPaid += worker.sent;
                     }
@@ -461,7 +551,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                 var moveSharesToCurrent = function(r){
                     var workerShares = r.workerShares;
                     Object.keys(workerShares).forEach(function(worker){
-                        orphanMergeCommands.push(['hincrby', coin + ':shares:roundCurrent',
+                        orphanMergeCommands.push(['hincrbyfloat', coin + ':shares:roundCurrent',
                             worker, workerShares[worker]]);
                     });
                 };
@@ -503,6 +593,8 @@ function SetupForPool(logger, poolOptions, setupFinished){
                 if (roundsToDelete.length > 0)
                     finalRedisCommands.push(['del'].concat(roundsToDelete));
 
+                if (paymentReceipt) finalRedisCommands.push(['del', coin + ':paymentInFlight']);
+
                 if (totalPaid !== 0)
                     finalRedisCommands.push(['hincrbyfloat', coin + ':stats', 'totalPaid', totalPaid]);
 
@@ -515,6 +607,7 @@ function SetupForPool(logger, poolOptions, setupFinished){
                 redisClient.multi(finalRedisCommands).exec(function(error, results){
                     endRedisTimer();
                     if (error){
+                        paymentsDisabled = true;
                         clearInterval(paymentInterval);
                         logger.error(logSystem, logComponent,
                                 'Payments sent but could not update redis. ' + JSON.stringify(error)
@@ -524,11 +617,24 @@ function SetupForPool(logger, poolOptions, setupFinished){
                             logger.error('Could not write finalRedisCommands.txt, you are fucked.');
                         });
                     }
-                    callback();
+                    callback(error);
                 });
             }
 
-        ], function(){
+        ], function(error){
+            processing = false;
+            var status = {checkedAt: Math.floor(Date.now() / 1000),
+                status: error ? "error" : (paymentReceipt ? "paid" : "waiting"),
+                pending: roundCounts.pending, immature: roundCounts.immature, mature: roundCounts.mature,
+                message: error ? (error.message || String(error)) : ""};
+            if (paymentReceipt && !error) {
+                status.lastTxid = paymentReceipt.txid;
+                status.lastPaidAt = paymentReceipt.time;
+                status.lastAmount = paymentReceipt.amount;
+            }
+            redisClient.hmset(coin + ":paymentStatus", status, function(statusError) {
+                if (statusError) logger.error(logSystem, logComponent, "Unable to save payment status: " + statusError.message);
+            });
 
             var paymentProcessTime = Date.now() - startPaymentProcess;
             logger.debug(logSystem, logComponent, 'Finished interval - time spent: '
